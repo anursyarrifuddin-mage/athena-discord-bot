@@ -1,0 +1,1035 @@
+# MASTER PROMPT — ATHENAA MULTI-FUNCTION DISCORD BOT
+## Music System, Academy Reminder, Web Dashboard, RPG, dan Super-Admin Hub
+
+Kamu bertindak sebagai **Senior Software Engineer, Python Backend Developer, Discord Bot Developer, Full-Stack Web Developer, Database Engineer, dan Security Engineer**.
+
+Tugasmu adalah membangun aplikasi bot Discord multifungsi bernama **Athenaa**, yang menggabungkan sistem musik, pengingat tugas akademik, integrasi Moodle dan Google Classroom, dashboard web, leveling RPG, serta panel Super-Admin.
+
+Aplikasi harus dirancang untuk dijalankan pada hosting Pterodactyl atau VPS dengan sumber daya terbatas.
+
+## 1. Aturan wajib pengembangan
+
+Ikuti ketentuan berikut selama proses pengembangan.
+
+1. Jangan menggunakan API berbayar, layanan AI berbayar, atau layanan premium yang wajib berlangganan.
+2. Prioritaskan library open-source, database lokal, layanan gratis, dan self-hosted.
+3. API atau OAuth gratis yang tetap memerlukan registrasi aplikasi dan kredensial boleh digunakan apabila dijelaskan dengan benar.
+4. Jangan membuat endpoint palsu, respons sukses palsu, data contoh yang disamarkan sebagai data asli, atau tombol yang tidak mempunyai fungsi.
+5. Jangan mengklaim suatu fitur selesai sebelum implementasi dan pengujiannya dilakukan.
+6. Apabila suatu fitur tidak dapat dijalankan karena keterbatasan API, izin akses, dependensi, hosting, atau kebijakan layanan, jelaskan penyebabnya dan buat fallback yang realistis.
+7. Periksa kode yang sudah ada sebelum mengubahnya. Jangan menghapus fitur atau konfigurasi lama tanpa alasan teknis yang jelas.
+8. Jangan menaruh seluruh aplikasi dalam satu file besar. Pisahkan bot, layanan web, modul musik, akademik, autentikasi, database, dan utilitas.
+9. Semua token, password, OAuth secret, dan kunci enkripsi harus berasal dari environment variable atau penyimpanan rahasia yang aman.
+10. Jangan membuat asumsi bahwa semua tautan YouTube, Spotify, Moodle, Google Classroom, radio, dan dokumen pasti dapat diakses.
+11. Jangan mengakali DRM, autentikasi, pembatasan akses, atau kebijakan layanan sumber audio.
+12. Jangan mengarang URL streaming radio, endpoint API, atau parameter yang belum diverifikasi.
+13. Gunakan Bahasa Indonesia untuk dokumentasi dan teks antarmuka secara default, sedangkan nama fungsi, variabel, dan kode boleh menggunakan Bahasa Inggris.
+14. Jika repository sudah tersedia, audit repository terlebih dahulu. Jika kosong, buat proyek dari awal.
+15. Jika pengerjaan terlalu besar untuk satu tahap, kerjakan bertahap dengan kode yang benar-benar dapat dijalankan, bukan hanya memberikan pseudocode.
+
+**Sasaran utama:** aplikasi yang fungsional, aman, mudah dirawat, hemat resource, tidak menggunakan API berbayar, dan memiliki dokumentasi instalasi yang jelas.
+
+---
+
+## 2. Teknologi yang digunakan
+
+Gunakan stack berikut sebagai pilihan utama.
+
+### Backend dan Discord
+
+- Python 3.12 atau versi stabil yang kompatibel dengan seluruh dependensi.
+- `discord.py` untuk bot Discord dan slash commands.
+- `yt-dlp` untuk ekstraksi metadata dan sumber audio yang dapat diakses serta digunakan sesuai ketentuan layanan.
+- FFmpeg untuk pemrosesan audio dan streaming ke voice channel.
+- FastAPI untuk REST API dan backend dashboard.
+- Uvicorn untuk menjalankan aplikasi web.
+- SQLAlchemy untuk akses database.
+- SQLite sebagai database awal.
+- `aiosqlite` apabila dibutuhkan untuk akses SQLite asynchronous.
+- `httpx` atau `aiohttp` untuk HTTP client.
+- `python-dotenv` untuk konfigurasi lokal.
+- `psutil` untuk statistik resource proses.
+- Library ICS dan parser tanggal yang sesuai untuk impor kalender.
+
+Gunakan HTML, CSS, dan JavaScript biasa dengan Jinja2 untuk dashboard agar ringan. Gunakan WebSocket untuk memperbarui status musik dan antrean secara langsung.
+
+Versi library harus kompatibel satu sama lain. Jangan menggunakan fungsi atau metode yang sudah dihapus dari versi dependensi yang dipilih.
+
+### Prinsip deployment
+
+- Satu instance bot aktif untuk setiap konfigurasi bot.
+- Hindari koneksi Discord ganda akibat menjalankan banyak worker web.
+- Gunakan event loop asynchronous tanpa operasi jaringan blocking di event loop utama.
+- Simpan data secara persisten pada volume hosting.
+- Jangan menyimpan database penting pada direktori sementara kontainer.
+- Pastikan proses musik dapat dihentikan dengan benar ketika aplikasi dimatikan atau diperbarui.
+
+Jangan menambahkan Redis, layanan cloud berbayar, atau framework frontend berat apabila tidak diperlukan.
+
+---
+
+## 3. Arsitektur proyek
+
+Buat struktur direktori yang modular. Contoh berikut dapat disesuaikan dengan repository aktual.
+
+```text
+athenaa/
+├── app/
+│   ├── main.py
+│   ├── config.py
+│   ├── database.py
+│   ├── models/
+│   ├── repositories/
+│   ├── services/
+│   │   ├── music_service.py
+│   │   ├── queue_service.py
+│   │   ├── lyrics_service.py
+│   │   ├── academy_service.py
+│   │   ├── moodle_service.py
+│   │   ├── classroom_service.py
+│   │   ├── reminder_service.py
+│   │   ├── leveling_service.py
+│   │   └── backup_service.py
+│   ├── bot/
+│   │   ├── client.py
+│   │   ├── commands/
+│   │   ├── events/
+│   │   └── checks/
+│   ├── web/
+│   │   ├── routes/
+│   │   ├── middleware/
+│   │   ├── templates/
+│   │   └── static/
+│   ├── security/
+│   └── utils/
+├── modules/
+├── data/
+├── logs/
+├── tests/
+├── requirements.txt
+├── .env.example
+├── .gitignore
+├── README.md
+└── start.sh
+```
+
+Struktur di atas merupakan rancangan awal, bukan kewajiban mutlak. Pastikan pemisahan tanggung jawab benar-benar diterapkan.
+
+Jangan meletakkan logika autentikasi, kontrol musik, dan manipulasi database langsung di dalam satu file command Discord.
+
+---
+
+# 4. SISTEM MUSIK DAN AUDIO
+
+## 4.1 Music engine
+
+Bangun sistem musik dengan dukungan berikut:
+
+- Pencarian lagu berdasarkan judul atau nama artis.
+- URL video YouTube.
+- Playlist YouTube apabila ekstraktornya mendukung.
+- YouTube live stream apabila tersedia dan kompatibel.
+- Link track, album, dan playlist Spotify sebagai input.
+- Stasiun radio internet melalui URL stream yang valid.
+- Antrean musik per-server Discord.
+- Informasi judul, artis, durasi jika tersedia, requester, sumber lagu, serta status pemutaran.
+- Pause, resume, skip, stop, dan pengaturan volume.
+- Penanganan error apabila audio tidak dapat diputar.
+
+Gunakan `yt-dlp` untuk pencarian dan ekstraksi sumber yang memang dapat diakses. Gunakan FFmpeg untuk memproses audio sesuai kebutuhan.
+
+Jangan menyimpan URL streaming sementara terlalu lama karena dapat kedaluwarsa. Simpan identifier dan metadata yang diperlukan, lalu ekstrak ulang ketika diperlukan.
+
+Buat pengelolaan resource agar FFmpeg, audio source, dan voice connection dibersihkan dengan benar setelah lagu berhenti, gagal diputar, atau server ditinggalkan.
+
+## 4.2 Dukungan Spotify yang realistis
+
+Dukung input Spotify dalam bentuk:
+
+- Track URL.
+- Album URL.
+- Playlist URL.
+
+Implementasikan alur berikut:
+
+1. Identifikasi jenis tautan Spotify.
+2. Ambil metadata lagu yang tersedia melalui metode yang kompatibel dan diizinkan.
+3. Untuk playlist atau album, ambil daftar metadata lagu jika dapat diakses.
+4. Cari padanan lagu pada sumber audio lain yang diperbolehkan, misalnya hasil pencarian YouTube yang dapat diakses.
+5. Cocokkan judul, artis, dan durasi jika tersedia.
+6. Tampilkan informasi lagu yang benar-benar akan diputar.
+7. Beri tahu pengguna jika suatu lagu tidak mempunyai padanan yang cukup meyakinkan.
+8. Jangan menyatakan bahwa audio berasal langsung dari Spotify jika sebenarnya berasal dari sumber lain.
+
+Jangan mengimplementasikan pengambilan atau penyiaran audio Spotify secara langsung dengan cara yang melanggar kebijakan layanan.
+
+Apabila metode metadata tertentu membutuhkan kredensial atau sudah tidak tersedia, sediakan fallback yang terdokumentasi, seperti memasukkan link Spotify untuk pencarian padanan atau mengimpor daftar lagu secara manual.
+
+## 4.3 Queue manager
+
+Setiap server Discord harus memiliki status pemutaran dan antrean yang terpisah.
+
+Implementasikan:
+
+- Add to Queue.
+- Play Now.
+- Move to Top.
+- Remove Item.
+- Clear Queue.
+- Shuffle.
+- Skip.
+- Stop.
+- Pause.
+- Resume.
+- Repeat One.
+- Repeat Queue.
+- Repeat Off.
+- Volume Control.
+- Queue Pagination.
+
+Gunakan identitas unik untuk setiap item antrean. Jangan mengidentifikasi lagu hanya berdasarkan judul karena lagu yang sama dapat ditambahkan beberapa kali.
+
+Lagu berikutnya harus diputar secara otomatis ketika lagu sebelumnya selesai. Pastikan mekanisme ini tidak menimbulkan race condition atau dua lagu bermain bersamaan.
+
+Jika lagu gagal diputar, catat kegagalannya, bersihkan resource, lalu lanjutkan ke item berikutnya sesuai kebijakan antrean.
+
+## 4.4 Host Lock System
+
+Terapkan kontrol antrean berbasis izin.
+
+**Session Host** adalah pengguna pertama yang berhasil memulai sesi musik aktif.
+
+Aturan:
+
+- Session Host dapat mengontrol antrean selama sesinya aktif.
+- Role DJ yang dikonfigurasi dapat mengontrol antrean semua pengguna.
+- Administrator server dapat mengontrol antrean.
+- Pengguna biasa hanya dapat menghapus item miliknya apabila kebijakan server mengizinkan.
+- Pengguna biasa tidak dapat menghapus, menghentikan, mengacak, atau melewati lagu pengguna lain tanpa izin.
+- Hak akses harus divalidasi ulang setiap kali perintah Discord atau permintaan dashboard dijalankan.
+
+Session Host tidak boleh ditentukan hanya dari siapa yang terakhir menggunakan command.
+
+Buat kebijakan yang jelas tentang perpindahan host ketika host keluar dari voice channel, kehilangan akses, atau sesi berakhir. Jangan membiarkan hak akses lama tertinggal setelah sesi musik di-reset.
+
+## 4.5 Autoplay dan 24/7
+
+### Autoplay
+
+Ketika antrean kosong:
+
+1. Periksa status autoplay.
+2. Gunakan metadata lagu terakhir sebagai acuan pencarian berikutnya.
+3. Cari beberapa kandidat yang berhubungan berdasarkan judul, artis, atau informasi yang benar-benar tersedia.
+4. Pilih kandidat yang memenuhi pemeriksaan sederhana.
+5. Tambahkan kandidat ke antrean dan mulai pemutaran.
+6. Jika tidak ditemukan kandidat yang layak, akhiri pemutaran dengan aman atau beri pesan yang sesuai.
+
+Jangan mengklaim adanya algoritma rekomendasi resmi apabila hanya menggunakan pencarian judul.
+
+Hindari pemutaran lagu yang sama berulang kali tanpa batas dengan riwayat lagu yang sudah diputar.
+
+### Mode 24/7
+
+- Pertahankan koneksi voice channel ketika fitur diaktifkan.
+- Tetap bekerja ketika antrean kosong.
+- Simpan preferensi 24/7 per-server.
+- Pulihkan status setelah restart apabila memungkinkan.
+- Tangani disconnect, timeout, dan kegagalan koneksi.
+- Jangan mengklaim bot dapat tetap online jika kontainer Pterodactyl dihentikan, hosting mati, atau koneksi jaringan terputus.
+
+Jika fitur 24/7 tidak aktif, bot dapat meninggalkan voice channel berdasarkan aturan idle timeout yang dapat dikonfigurasi.
+
+## 4.6 Radio internet
+
+Sediakan pilihan radio melalui konfigurasi URL stream.
+
+Contoh kategori radio yang ingin didukung:
+
+- Prambors.
+- Hard Rock FM.
+- Gen FM.
+- Lofi Girl atau sumber streaming lain yang memang dapat diakses.
+
+Jangan menebak URL stream stasiun radio. Gunakan URL yang telah diverifikasi atau sediakan pengaturan agar administrator dapat memasukkan URL sendiri.
+
+Validasi format URL, tangani redirect jika didukung, dan tampilkan error jika stream tidak tersedia.
+
+## 4.7 Lirik otomatis dengan LRCLIB
+
+Gunakan API publik LRCLIB tanpa API key.
+
+Alur:
+
+1. Ambil judul lagu, artis, album, dan durasi jika tersedia.
+2. Cari kecocokan berdasarkan metadata tersebut.
+3. Utamakan hasil yang paling sesuai dengan lagu yang sedang diputar.
+4. Jika tersedia `syncedLyrics`, tampilkan baris sesuai timestamp selama pemutaran.
+5. Jika hanya `plainLyrics` tersedia, tampilkan lirik tanpa sinkronisasi waktu.
+6. Jika lagu tidak mempunyai lirik, tampilkan status yang jelas.
+7. Patuhi rate limit, termasuk respons HTTP 429 dan header `Retry-After`.
+8. Identifikasi aplikasi melalui User-Agent yang sesuai.
+9. Gunakan cache untuk mengurangi permintaan berulang.
+
+Sinkronisasi per kata hanya boleh ditampilkan apabila data memang mendukungnya. Jangan membuat timestamp lirik sendiri dan mengeklaimnya akurat.
+
+Jangan membuat bot gagal memutar musik hanya karena API lirik sedang tidak tersedia.
+
+## 4.8 Favorit dan playlist
+
+Pengguna dapat:
+
+- Menambahkan lagu ke favorit.
+- Menghapus lagu dari favorit.
+- Menyimpan antrean sebagai playlist.
+- Memutar playlist tersimpan.
+- Menghapus playlist miliknya.
+- Melihat daftar playlist melalui dashboard.
+
+Pisahkan favorit pengguna dan playlist milik server sesuai desain hak akses.
+
+Semua operasi harus tersimpan di database, bukan hanya di memori proses.
+
+---
+
+# 5. INTEGRASI AKADEMIK DAN REMINDER
+
+## 5.1 Sistem tugas
+
+Setiap tugas sekurang-kurangnya memiliki:
+
+- ID tugas unik.
+- ID server Discord.
+- Nama mata kuliah.
+- Judul tugas.
+- Deskripsi.
+- Sumber tugas.
+- Tanggal dan waktu deadline.
+- Zona waktu.
+- URL sumber atau tugas.
+- Daftar lampiran.
+- Status selesai atau belum selesai.
+- Pengguna yang membuat atau mengubah tugas.
+- Timestamp sinkronisasi terakhir jika berasal dari integrasi eksternal.
+
+Simpan tugas berdasarkan server agar data antar-server tidak bercampur.
+
+Dukung input manual jika integrasi eksternal belum dikonfigurasi.
+
+## 5.2 Sinkronisasi kalender Moodle
+
+Sediakan konfigurasi tautan kalender Moodle dalam format `.ics`.
+
+Implementasikan:
+
+- Pengambilan kalender secara periodik.
+- Parsing event kalender.
+- Konversi waktu menggunakan zona waktu yang benar.
+- Pemetaan event ke data tugas.
+- Penanganan perubahan tanggal, penghapusan, dan pembaruan event.
+- Pencocokan event berdasarkan UID atau identifier stabil.
+- Pencegahan duplikasi tugas ketika sinkronisasi berulang.
+- Pencatatan waktu sinkronisasi terakhir.
+- Penanganan tautan kalender yang kedaluwarsa, tidak valid, atau tidak dapat diakses.
+
+Jangan mengasumsikan semua event kalender merupakan tugas. Sediakan konfigurasi atau aturan pemetaan yang dapat diperiksa.
+
+Tautan kalender yang mengandung token akses harus diperlakukan sebagai rahasia dan tidak ditampilkan kepada pengguna tanpa izin.
+
+## 5.3 Google Classroom
+
+Integrasikan Google Classroom melalui mekanisme resmi yang tersedia dan memerlukan OAuth serta scope yang sesuai.
+
+Fitur yang dituju:
+
+- Mengambil daftar kelas yang dapat diakses akun pengguna.
+- Membaca tugas dan deadline yang tersedia.
+- Membaca deskripsi serta tautan materi yang dapat diakses.
+- Menyinkronkan pembaruan tugas.
+- Menangani pencabutan akses OAuth dan token kedaluwarsa.
+- Menghindari duplikasi tugas.
+- Menampilkan status koneksi dan waktu sinkronisasi terakhir.
+
+Jangan menggunakan scraping untuk melewati login atau batasan akses Google Classroom.
+
+Jangan menganggap tautan `.ics` tersedia untuk setiap akun atau kelas. Jika integrasi API belum dikonfigurasi, tampilkan status **Belum dikonfigurasi** dan sediakan alternatif berupa impor `.ics` yang valid atau input tugas manual.
+
+Sediakan dokumentasi konfigurasi Google Cloud, OAuth consent, redirect URI, scope yang diperlukan, dan cara memasukkan kredensial.
+
+Jangan meminta izin Google yang tidak dibutuhkan.
+
+## 5.4 Pengunduhan modul dan lampiran
+
+Apabila sumber tugas menyediakan file yang dapat diakses dengan izin yang benar, pengguna dapat mengunduh lampirannya melalui bot atau dashboard.
+
+Batasan wajib:
+
+- Ukuran file maksimum 15 MB.
+- Default allowlist ekstensi: `.pdf`, `.doc`, `.docx`.
+- Blokir ekstensi executable, script, dan format berisiko lainnya.
+- Periksa MIME type dan signature file jika memungkinkan.
+- Jangan mempercayai nama file dari URL.
+- Hindari path traversal dan nama file berbahaya.
+- Gunakan nama file internal yang aman, seperti UUID.
+- Jangan mengeksekusi atau membuka file menggunakan program yang tidak diperlukan.
+- Terapkan timeout dan batas koneksi saat pengunduhan.
+- Jangan melewati autentikasi atau mengambil file yang tidak mempunyai izin akses.
+
+Simpan file pada direktori `modules/` atau direktori data persisten yang aman.
+
+Pastikan hanya pengguna yang mempunyai izin yang dapat mengakses file. File sensitif tidak boleh tersedia sebagai tautan publik tanpa autentikasi.
+
+Jika file melebihi batas, beri pesan yang jelas tanpa memenuhi seluruh RAM dengan file unduhan.
+
+## 5.5 Reminder otomatis
+
+Sediakan pengingat dengan tiga tahap:
+
+- H-3 hari sebagai nilai awal yang dapat dikonfigurasi.
+- H-6 jam.
+- H-1 jam.
+
+Administrator dapat mengubah interval H-x hari melalui dashboard.
+
+Setiap pengingat dikirim ke Task Channel yang ditentukan untuk server tersebut, menggunakan Discord embed yang berisi:
+
+- Nama mata kuliah.
+- Judul tugas.
+- Deadline lokal.
+- Sisa waktu.
+- Link tugas apabila tersedia.
+- Status penyelesaian.
+
+Gunakan zona waktu yang dapat dikonfigurasi, dengan `Asia/Jakarta` sebagai default.
+
+Buat sistem reminder yang:
+
+1. Tetap bekerja setelah aplikasi restart.
+2. Tidak mengirim pengingat yang sama berulang kali.
+3. Mencatat setiap pengingat yang telah dikirim.
+4. Menghentikan pengingat normal setelah tugas ditandai selesai.
+5. Menghindari pengingat yang telah melewati deadline.
+6. Menangani tugas yang baru disinkronkan ketika deadline sudah dekat.
+7. Menangani Discord API error, rate limit, dan channel yang sudah tidak tersedia.
+
+Sistem tidak boleh hanya bergantung pada satu timer di memori. Status tugas dan pengingat harus memiliki rekam jejak persisten di database.
+
+## 5.6 Checklist akademik
+
+Pengguna dapat:
+
+- Melihat tugas yang akan datang.
+- Memfilter tugas berdasarkan mata kuliah.
+- Memfilter tugas berdasarkan status.
+- Menandai tugas sebagai selesai.
+- Membatalkan status selesai jika diizinkan.
+- Melihat tugas terlambat.
+- Membuka sumber atau mengunduh modul yang diizinkan.
+
+Tugas yang berasal dari Moodle atau Classroom tidak boleh secara otomatis diubah pada sistem sumber apabila pengguna hanya menandai tugas selesai di dashboard Athenaa. Status selesai pada Athenaa harus dipisahkan dari status penyerahan tugas asli, kecuali integrasi resmi memang menyediakan operasi yang dibutuhkan dan diaktifkan secara eksplisit.
+
+---
+
+# 6. WEB DASHBOARD
+
+Bangun dashboard yang modern, responsif, dan ringan.
+
+Gunakan desain dark mode dengan aksen warna yang konsisten, navigasi yang jelas, tampilan mobile-friendly, serta komponen status yang mudah dibaca.
+
+## 6.1 Login Discord OAuth2
+
+Gunakan Discord OAuth2 untuk login.
+
+Persyaratan:
+
+- OAuth authorization flow yang benar.
+- Validasi parameter `state`.
+- Validasi redirect URI.
+- Session ID acak yang disimpan dan diverifikasi oleh backend.
+- Cookie sesi `HttpOnly`.
+- `Secure` pada lingkungan HTTPS produksi.
+- `SameSite=Lax` atau konfigurasi aman yang sesuai.
+- Proteksi CSRF untuk operasi yang mengubah data.
+- Rate limiting untuk endpoint sensitif.
+- Logout dan invalidasi sesi.
+- Tidak menyimpan access token di `localStorage`.
+- Tidak mengirim token atau secret ke console frontend.
+- Hak akses dashboard harus divalidasi oleh backend pada setiap operasi.
+
+Jangan menganggap pengguna yang berhasil login otomatis menjadi administrator.
+
+Periksa izin Discord terhadap server yang dipilih. Pengguna harus mempunyai hak yang sesuai untuk mengatur channel, tugas, integrasi, atau antrean.
+
+## 6.2 Halaman dashboard
+
+Buat setidaknya halaman berikut:
+
+1. **Overview** — ringkasan bot, tugas mendatang, dan status integrasi.
+2. **Music Player** — lagu aktif, requester, durasi, volume, dan kontrol player.
+3. **Queue** — daftar lagu, reorder, skip, hapus item, dan shuffle sesuai izin.
+4. **Library** — favorit dan playlist.
+5. **Academy** — semua tugas, filter mata kuliah, deadline, checklist, dan detail tugas.
+6. **Modules** — daftar modul yang dapat diakses dan diunduh.
+7. **Leveling** — leaderboard anggota.
+8. **AFK** — status AFK dan alasan pengguna apabila dapat dilihat sesuai kebijakan.
+9. **Server Settings** — pengaturan musik, akademik, channel, dan role.
+10. **Super-Admin** — hanya untuk owner bot yang terdaftar.
+
+## 6.3 Real-time player
+
+Dashboard harus menampilkan status player terbaru, antara lain:
+
+- Judul dan artis lagu.
+- Thumbnail jika tersedia.
+- Peminta lagu.
+- Posisi pemutaran.
+- Durasi total apabila tersedia.
+- Progress bar.
+- Volume 1–100%.
+- Status pause atau playing.
+- Status loop.
+- Status autoplay.
+- Status 24/7.
+- Daftar antrean terbaru.
+
+Gunakan WebSocket untuk pembaruan status secara real-time.
+
+Jika koneksi WebSocket terputus, lakukan reconnect dan sinkronisasi ulang. Jangan menampilkan status terkini jika backend sebenarnya belum mempunyai data yang valid.
+
+Semua kontrol dashboard wajib menggunakan endpoint backend yang sama dengan aturan izin bot Discord.
+
+---
+
+# 7. SERVER SETTINGS DAN MULTI-GUILD
+
+Bot harus mendukung banyak server Discord tanpa mencampur data.
+
+Setiap server dapat mengatur:
+
+- Music Channel jika diperlukan.
+- Task Channel.
+- Role DJ.
+- Tautan kalender Moodle.
+- Integrasi Google Classroom.
+- Interval reminder.
+- Zona waktu.
+- Idle timeout.
+- Pengaturan 24/7.
+- Pengaturan autoplay.
+- Kebijakan leveling dan EXP.
+- Pengaturan upload dan penyimpanan modul.
+
+Administrator hanya dapat mengubah konfigurasi server yang boleh mereka kelola.
+
+Gunakan `MAIN_GUILD_ID` sebagai server fallback bila diperlukan, bukan sebagai alasan untuk menggunakan data server utama pada semua server.
+
+Jangan menganggap `DJ_ROLE_ID` global selalu sama pada setiap server. Dukung konfigurasi role per-server dengan nilai environment sebagai fallback jika diperlukan.
+
+Perubahan pengaturan harus disimpan di database dan tetap berlaku setelah restart.
+
+---
+
+# 8. RPG, LEVELING, DAN AFK
+
+## 8.1 EXP dan leveling
+
+Buat sistem leveling berdasarkan aktivitas pesan yang wajar.
+
+Sistem harus mendukung:
+
+- EXP per-server.
+- Level masing-masing anggota.
+- EXP saat ini.
+- Kebutuhan EXP untuk level berikutnya.
+- Perhitungan `max_exp` yang dinamis.
+- Pencatatan level-up.
+- Leaderboard top 15 per-server.
+- Tampilan leaderboard di dashboard.
+
+Gunakan formula leveling yang jelas dan terkonfigurasi. Contoh formula awal:
+
+`max_exp = 100 + (level * 25)`
+
+Simpan formula dalam satu modul agar mudah diubah.
+
+Cegah farming EXP dengan:
+
+- Cooldown per anggota.
+- Tidak memberi EXP pada pesan bot.
+- Tidak memberi EXP berulang kali dari spam atau pesan kosong.
+- Validasi aktivitas berdasarkan aturan yang dapat dikonfigurasi.
+
+Contoh cooldown awal adalah 60 detik per anggota per-server. Angka tersebut harus dapat diubah melalui konfigurasi.
+
+Pastikan sistem tidak menyebabkan setiap pesan menghasilkan operasi database yang berlebihan.
+
+## 8.2 AFK system
+
+Anggota dapat mengatur status AFK melalui command Discord atau dashboard.
+
+Fitur:
+
+- Set AFK dengan alasan opsional.
+- Simpan waktu mulai AFK.
+- Informasikan status AFK ketika anggota disebut atau di-tag.
+- Batasi informasi yang ditampilkan sesuai kebutuhan.
+- Hapus status AFK saat anggota kembali beraktivitas sesuai kebijakan yang dijelaskan.
+- Sediakan command untuk melihat status AFK apabila diizinkan.
+
+Status AFK harus tersimpan di database agar tidak hilang setelah restart.
+
+---
+
+# 9. DAFTAR DISCORD SLASH COMMAND
+
+Gunakan slash commands, Discord interactions, dan komponen Discord yang sesuai.
+
+## Musik
+
+Implementasikan:
+
+`/play query`
+`/search query`
+`/queue`
+`/nowplaying`
+`/skip`
+`/stop`
+`/pause`
+`/resume`
+`/shuffle`
+`/remove`
+`/move`
+`/playnow`
+`/volume`
+`/loop`
+`/autoplay`
+`/247`
+`/lyrics`
+`/favorite`
+`/playlist save`
+`/playlist play`
+`/playlist delete`
+`/leave`
+
+Sesuaikan nama subcommand dengan aturan Discord yang berlaku.
+
+## Akademik
+
+Implementasikan:
+
+`/task list`
+`/task add`
+`/task edit`
+`/task delete`
+`/task done`
+`/task reopen`
+`/task sync`
+`/task detail`
+`/module list`
+`/module download`
+
+Command perubahan dan penghapusan tugas harus memiliki pemeriksaan izin.
+
+## RPG dan AFK
+
+Implementasikan:
+
+`/level`
+`/rank`
+`/leaderboard`
+`/afk`
+`/afk status`
+
+## Pengaturan
+
+Implementasikan command atau dashboard untuk:
+
+- Menentukan Task Channel.
+- Menentukan role DJ.
+- Mengonfigurasi kalender Moodle.
+- Mengonfigurasi Google Classroom.
+- Menentukan zona waktu.
+- Mengatur reminder.
+- Mengatur kebijakan musik.
+
+Jangan menempatkan secret atau token integrasi di opsi command yang terlihat oleh anggota lain.
+
+Seluruh command harus mempunyai error handling. Gunakan ephemeral response jika sesuai agar pesan error tidak mengganggu channel publik.
+
+---
+
+# 10. SUPER-ADMIN HUB
+
+Panel Super-Admin hanya dapat digunakan oleh `OWNER_DISCORD_ID` yang dikonfigurasi secara eksplisit.
+
+Sembunyikan panel dari pengguna lain, tetapi jangan menjadikan penyembunyian menu sebagai satu-satunya kontrol keamanan. Backend wajib memeriksa identitas owner setiap kali endpoint Super-Admin diakses.
+
+## 10.1 Monitoring resource
+
+Tampilkan:
+
+- RAM yang digunakan oleh proses atau kontainer sejauh dapat diukur.
+- CPU usage apabila tersedia.
+- Uptime aplikasi.
+- Status koneksi Discord.
+- Jumlah guild yang terhubung.
+- Ukuran database.
+- Ruang penyimpanan yang dapat diakses aplikasi.
+- Status terakhir sinkronisasi akademik.
+- Status proses musik.
+
+Jelaskan metrik yang benar-benar tersedia. Jangan mengklaim statistik seluruh node Pterodactyl apabila aplikasi hanya dapat membaca resource kontainernya sendiri.
+
+## 10.2 Backup database
+
+Buat fungsi backup database menggunakan metode yang aman untuk SQLite.
+
+Persyaratan:
+
+- Menghasilkan snapshot database yang konsisten.
+- Meminimalkan risiko database korup.
+- Menggunakan nama file dengan timestamp.
+- Mengompresi backup jika sesuai.
+- Mengenkripsi backup yang mengandung token atau data sensitif menggunakan kunci yang dikonfigurasi terpisah.
+- Mengirim file ke DM Discord owner apabila memungkinkan.
+- Memeriksa batas ukuran lampiran sebelum upload.
+- Menangani DM yang ditutup, kegagalan upload, atau file terlalu besar.
+- Menyimpan backup lokal jika pengiriman gagal.
+- Mencatat hasil backup tanpa menulis token atau secret ke log.
+- Membersihkan file sementara dengan aman.
+
+Jangan pernah mengirim kunci enkripsi bersama file backup dalam pesan yang sama.
+
+Berikan pesan sukses hanya setelah proses backup benar-benar selesai dan hasilnya sudah diverifikasi.
+
+## 10.3 Update yt-dlp
+
+Sediakan kontrol untuk memeriksa versi dan menjalankan update `yt-dlp`.
+
+Jangan mengklaim library Python yang sudah dimuat dapat diperbarui dengan aman hanya dengan mengganti paket di disk.
+
+Jika update tanpa restart seluruh bot merupakan persyaratan, isolasikan ekstraktor musik dalam worker atau subprocess tersendiri sehingga worker dapat diperbarui dan dimulai ulang sementara bot dan dashboard tetap aktif.
+
+Alur update harus:
+
+1. Memeriksa versi yang sedang digunakan.
+2. Memvalidasi sumber paket.
+3. Menjalankan update sebagai job terkontrol.
+4. Mencatat hasil update.
+5. Menguji apakah ekstraksi masih berfungsi.
+6. Menjalankan ulang worker yang diperlukan.
+7. Memulihkan versi sebelumnya atau memberikan instruksi pemulihan jika update gagal.
+
+Jika desain hosting atau dependensi tidak memungkinkan pembaruan tanpa restart worker, nyatakan batasan tersebut dengan jelas. Jangan membuat tombol update yang hanya menampilkan pesan sukses tanpa mengubah versi sebenarnya.
+
+---
+
+# 11. DATABASE DAN PERSISTENSI
+
+Rancang model database yang setidaknya mencakup:
+
+- GuildSettings.
+- UserSettings.
+- MusicSessions.
+- QueueItems jika persistensi antrean diperlukan.
+- Favorites.
+- Playlists.
+- PlaylistItems.
+- Tasks.
+- TaskAttachments.
+- ReminderDeliveries.
+- IntegrationConnections.
+- LevelProfiles.
+- AFKStatuses.
+- WebSessions.
+- AuditLogs.
+
+Gunakan primary key, foreign key, indeks, dan unique constraints yang sesuai.
+
+Pastikan semua data penting memiliki batas kepemilikan berdasarkan guild, user, atau role.
+
+Gunakan transaksi ketika mengubah beberapa data yang saling berkaitan.
+
+Buat migrasi skema yang aman. Jangan menghapus tabel atau kolom lama secara otomatis tanpa migrasi yang sesuai.
+
+SQLite cukup untuk deployment single-instance awal. Dokumentasikan batasan skalabilitasnya dan sediakan jalur migrasi ke PostgreSQL jika diperlukan.
+
+Simpan log terstruktur dan rotasi log agar file tidak tumbuh tanpa batas.
+
+---
+
+# 12. ENVIRONMENT CONFIGURATION
+
+Buat `.env.example` yang lengkap dan hanya berisi placeholder.
+
+Gunakan variabel seperti berikut:
+
+```dotenv
+WEB_HOST=0.0.0.0
+WEB_PORT=10031
+WEB_BASE_URL=https://example.com
+
+DISCORD_TOKEN=
+DISCORD_CLIENT_ID=
+DISCORD_CLIENT_SECRET=
+DISCORD_REDIRECT_URI=https://example.com/auth/callback
+
+MAIN_GUILD_ID=
+OWNER_DISCORD_ID=
+DJ_ROLE_ID=
+
+CUSTOM_LOGO_URL=
+
+DATABASE_URL=sqlite+aiosqlite:///./data/athenaa.db
+
+SESSION_SECRET=
+ENCRYPTION_KEY=
+BACKUP_ENCRYPTION_KEY=
+
+DEFAULT_TIMEZONE=Asia/Jakarta
+MAX_ATTACHMENT_MB=15
+
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REDIRECT_URI=https://example.com/auth/google/callback
+
+LOG_LEVEL=INFO
+```
+
+Sesuaikan `DATABASE_URL` dengan driver SQLAlchemy yang benar-benar digunakan dan pastikan direktori database dibuat saat startup.
+
+Konfigurasi Moodle, Google Classroom per-server, dan URL radio sebaiknya dapat dikelola melalui dashboard dengan penyimpanan yang aman.
+
+Jangan menulis `.env` berisi kredensial asli ke repository. Tambahkan `.env`, database sensitif, token, file backup, dan file sementara ke `.gitignore`.
+
+Jangan menjadikan environment variable dengan placeholder sebagai konfigurasi yang seolah-olah sudah valid.
+
+Jika konfigurasi wajib belum diisi, tampilkan pesan startup yang jelas dan hentikan hanya fungsi yang memang tidak dapat berjalan. Fitur mandiri seperti leveling tidak harus gagal hanya karena Moodle belum dikonfigurasi.
+
+---
+
+# 13. KEAMANAN APLIKASI
+
+Terapkan perlindungan pada seluruh jalur akses.
+
+- Server-side authorization untuk setiap operasi.
+- Validasi tipe dan ukuran input.
+- Rate limiting per endpoint.
+- Pembatasan penggunaan resource.
+- Proteksi CSRF untuk operasi berbasis sesi.
+- Penanganan CORS secara ketat.
+- Pencegahan SQL injection melalui ORM dan parameterized queries.
+- Pencegahan path traversal saat menangani file.
+- Proteksi terhadap request yang menargetkan alamat internal ketika menerima URL eksternal.
+- Timeout untuk request jaringan.
+- Penghapusan atau penyamaran token dalam log.
+- Enkripsi token OAuth yang disimpan jika diperlukan.
+- Audit log untuk aksi administrator dan owner.
+- Validasi izin pengguna Discord sebelum mengubah status musik atau tugas.
+- Penanganan kegagalan Discord API dan API eksternal.
+
+Rate limiter hanya merupakan perlindungan dasar terhadap penyalahgunaan request. Jangan menyebutnya sebagai perlindungan DDoS penuh.
+
+Jangan menyediakan endpoint publik yang memungkinkan pengguna sembarang mengakses database, mengunduh backup, menjalankan shell command, atau memperbarui paket.
+
+Jangan menerima nama file, lokasi file, role ID, channel ID, atau URL tanpa validasi yang sesuai.
+
+---
+
+# 14. WEB API
+
+Buat REST API yang modular dan terdokumentasi.
+
+Kelompok endpoint yang diperlukan meliputi:
+
+- Auth dan session.
+- Guild list dan guild settings.
+- Music player state.
+- Queue management.
+- Playlist dan favorites.
+- Academy tasks.
+- Module attachment.
+- Moodle sync.
+- Google Classroom sync.
+- RPG leaderboard.
+- AFK status.
+- Super-Admin metrics.
+- Backup management.
+- Update worker.
+
+Contoh kelompok endpoint:
+
+```text
+GET    /api/guilds
+GET    /api/guilds/{guild_id}/settings
+PATCH  /api/guilds/{guild_id}/settings
+
+GET    /api/guilds/{guild_id}/music/state
+GET    /api/guilds/{guild_id}/music/queue
+POST   /api/guilds/{guild_id}/music/play
+POST   /api/guilds/{guild_id}/music/control
+
+GET    /api/guilds/{guild_id}/tasks
+POST   /api/guilds/{guild_id}/tasks
+PATCH  /api/tasks/{task_id}
+DELETE /api/tasks/{task_id}
+POST   /api/tasks/{task_id}/complete
+
+GET    /api/guilds/{guild_id}/leaderboard
+
+GET    /api/admin/metrics
+POST   /api/admin/backup
+POST   /api/admin/yt-dlp/update
+
+GET    /health
+```
+
+Endpoint tersebut hanyalah rancangan awal. Sesuaikan desain akhir dengan kebutuhan frontend dan model database.
+
+Setiap endpoint harus memiliki validasi input, otorisasi, respons error yang konsisten, dan penanganan operasi yang gagal.
+
+Jangan mengizinkan ID guild dari request menggantikan pemeriksaan hak akses pengguna.
+
+Endpoint kesehatan hanya boleh mengungkap informasi operasional minimal dan tidak boleh mengembalikan secret atau data sensitif.
+
+---
+
+# 15. PENGUJIAN DAN KRITERIA PENERIMAAN
+
+Buat automated tests menggunakan `pytest` dan library pendukung yang sesuai.
+
+Minimal uji hal-hal berikut:
+
+### Musik
+
+- Parsing URL lagu dan playlist.
+- Penambahan serta penghapusan item antrean.
+- Pencegahan dua pemutaran bersamaan.
+- Hak akses Session Host.
+- Override DJ dan administrator.
+- Volume dan loop.
+- Kegagalan ekstraksi.
+- Autoplay ketika antrean habis.
+- Perubahan status player ke dashboard.
+- Penanganan URL Spotify yang tidak bisa diselesaikan.
+
+### Akademik
+
+- Parsing kalender `.ics`.
+- Konversi zona waktu.
+- Sinkronisasi tanpa tugas duplikat.
+- Pembaruan deadline.
+- Pengiriman reminder satu kali per tahap.
+- Penghentian reminder untuk tugas selesai.
+- Tugas dengan deadline yang sudah lewat.
+- Error API eksternal dan token yang kedaluwarsa.
+- Penolakan file yang terlalu besar atau memiliki ekstensi berbahaya.
+- Pencegahan akses lintas-server.
+
+### Dashboard dan keamanan
+
+- Login OAuth dan callback.
+- Penolakan `state` OAuth yang salah.
+- Cookie sesi dan logout.
+- Validasi permission.
+- Rate limiting.
+- Penolakan akses non-owner ke Super-Admin.
+- Pencegahan path traversal.
+- Kegagalan WebSocket dan reconnect.
+
+### Database dan operasional
+
+- Startup dengan konfigurasi lengkap.
+- Startup dengan konfigurasi opsional yang tidak tersedia.
+- Migrasi skema.
+- Persistensi data setelah restart.
+- Proses backup dan pemeriksaan hasilnya.
+- Penanganan kegagalan pengiriman backup.
+- Pemulihan setelah exception.
+- Pembersihan resource audio.
+
+Gunakan mock atau test doubles untuk layanan eksternal dalam automated tests. Pisahkan mock dari pengujian integrasi sesungguhnya.
+
+Jangan menyatakan bahwa tes integrasi YouTube, Google Classroom, Moodle, OAuth, atau Discord telah berhasil jika belum pernah dijalankan menggunakan konfigurasi dan akses yang sah.
+
+---
+
+# 16. DOKUMENTASI DAN HASIL AKHIR
+
+Buat dokumentasi README dalam Bahasa Indonesia yang memuat:
+
+1. Gambaran umum aplikasi.
+2. Arsitektur sistem.
+3. Fitur yang sudah selesai dan batasannya.
+4. Daftar dependensi.
+5. Persyaratan Python dan FFmpeg.
+6. Cara membuat Discord bot melalui Developer Portal.
+7. Konfigurasi OAuth2 dashboard.
+8. Konfigurasi Google Classroom.
+9. Cara menambahkan kalender Moodle.
+10. Konfigurasi database.
+11. Cara menjalankan aplikasi secara lokal.
+12. Cara menjalankan aplikasi pada Pterodactyl.
+13. Startup command.
+14. Environment variables.
+15. Cara melakukan backup dan restore.
+16. Troubleshooting error.
+17. Cara memperbarui dependensi.
+18. Perizinan dan keterbatasan sumber audio eksternal.
+
+Sediakan `requirements.txt`, `.env.example`, `.gitignore`, startup script, serta automated tests.
+
+Jelaskan port web 10031 sebagai default konfigurasi yang dapat diganti sesuai alokasi port hosting.
+
+Jangan meletakkan kredensial nyata pada dokumentasi.
+
+## 17. FORMAT LAPORAN PENGERJAAN
+
+Setelah implementasi, berikan laporan dengan format:
+
+**A. Fitur selesai**
+Hanya fitur yang sudah benar-benar dibuat dan diverifikasi.
+
+**B. Fitur parsial**
+Jelaskan bagian yang sudah dibuat, bagian yang belum, dan penyebabnya.
+
+**C. Integrasi eksternal**
+Tuliskan integrasi yang memerlukan token, OAuth, URL kalender, izin, atau konfigurasi tambahan.
+
+**D. Struktur file**
+Jelaskan file utama beserta tanggung jawabnya.
+
+**E. Instalasi**
+Berikan perintah instalasi, konfigurasi `.env`, dan startup command yang benar-benar sesuai dengan implementasi.
+
+**F. Pengujian**
+Tuliskan tes yang dijalankan, hasilnya, dan keterbatasan tes yang belum dilakukan.
+
+**G. Keamanan**
+Jelaskan konfigurasi sensitif yang masih harus dilakukan oleh pemilik aplikasi.
+
+**H. Keterbatasan**
+Sebutkan dengan jujur semua fitur yang belum dapat diwujudkan atau memerlukan layanan eksternal tertentu.
+
+## 18. INSTRUKSI MULAI
+
+Sekarang mulailah dengan memeriksa repository dan lingkungan kerja yang tersedia.
+
+Urutan pengerjaan:
+
+1. Audit file, dependensi, dan konfigurasi yang sudah ada.
+2. Tentukan arsitektur yang konsisten dan sesuai hosting.
+3. Buat model database dan konfigurasi.
+4. Implementasikan autentikasi, izin, dan fondasi backend.
+5. Implementasikan music engine beserta queue manager.
+6. Implementasikan academy, integrasi kalender, dan reminder.
+7. Implementasikan dashboard dan real-time state.
+8. Implementasikan RPG, AFK, serta Super-Admin.
+9. Tambahkan tes dan dokumentasi.
+10. Jalankan pemeriksaan sintaks, tes yang relevan, dan validasi startup.
+11. Perbaiki error yang ditemukan.
+12. Buat laporan akhir berdasarkan hasil aktual.
+
+Jika memiliki akses untuk menulis dan menjalankan kode, lakukan implementasi langsung pada file proyek, bukan sekadar memberikan contoh kode di percakapan.
+
+**Prioritas tertinggi adalah kebenaran teknis, keamanan, persistensi data, dan fungsi yang benar-benar berjalan. Jangan mengorbankan hal tersebut demi terlihat seolah-olah semua fitur sudah selesai.**
