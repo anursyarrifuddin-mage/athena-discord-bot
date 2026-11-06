@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -103,10 +104,15 @@ class GuildQueueState:
     active_radio_name: str = ""
     is_loading_stream: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    last_activity: float = field(default_factory=time.time)
 
 
 class QueueService:
     """Layanan manajemen antrean musik per-server Discord dengan Host Lock System & Real-Time Sync."""
+
+    # Konfigurasi cleanup guild inactive
+    CLEANUP_INTERVAL_SEC = 3600      # Cek cleanup tiap 1 jam
+    INACTIVITY_THRESHOLD_SEC = 7200  # Hapus state guild inactive > 2 jam
 
     def __init__(self) -> None:
         self._states: Dict[str, GuildQueueState] = {}
@@ -114,6 +120,31 @@ class QueueService:
         self.voice_bot_active: bool = False
         self.active_guilds: Dict[str, str] = {}
         self.prefetched_autoplay: Dict[str, List[QueueItemModel]] = {}
+        self._last_cleanup: float = 0.0
+
+    def _maybe_cleanup_inactive_guilds(self) -> int:
+        """Hapus GuildQueueState untuk guild yang inactive > threshold."""
+        now = time.time()
+        if now - self._last_cleanup < self.CLEANUP_INTERVAL_SEC:
+            return 0
+
+        removed = 0
+        inactive_guilds = [
+            gid for gid, state in self._states.items()
+            if now - state.last_activity > self.INACTIVITY_THRESHOLD_SEC
+        ]
+        for gid in inactive_guilds:
+            del self._states[gid]
+            removed += 1
+
+        self._last_cleanup = now
+        return removed
+
+    def _touch_activity(self, guild_id: str) -> None:
+        """Update last_activity timestamp untuk guild."""
+        state = self._states.get(guild_id)
+        if state:
+            state.last_activity = time.time()
 
     def set_prefetched_autoplay(self, guild_id: str, items: List[QueueItemModel]) -> None:
         if guild_id:
@@ -147,6 +178,7 @@ class QueueService:
                 pass
 
     def get_state(self, guild_id: str) -> GuildQueueState:
+        self._maybe_cleanup_inactive_guilds()
         if guild_id not in self._states:
             st = GuildQueueState(guild_id=guild_id)
             try:
@@ -161,6 +193,7 @@ class QueueService:
             except Exception:
                 pass
             self._states[guild_id] = st
+        self._touch_activity(guild_id)
         return self._states[guild_id]
 
     def _assign_host_if_empty(self, state: GuildQueueState, user_id: str, username: str) -> None:
@@ -198,6 +231,7 @@ class QueueService:
         is_autoplay: bool = False,
     ) -> Tuple[QueueItemModel, bool]:
         state = self.get_state(guild_id)
+        self._touch_activity(guild_id)
         auto_flag = bool(
             is_autoplay
             or source_type == "autoplay"
@@ -378,6 +412,7 @@ class QueueService:
         - Hanya memastikan judul lagu yang sama tidak diputar ulang.
         """
         state = self.get_state(guild_id)
+        self._touch_activity(guild_id)
         previous = state.current_track
         if previous is not None:
             state.last_played_track = previous
@@ -500,6 +535,7 @@ class QueueService:
         dj_role_id: str = "",
     ) -> QueueItemModel:
         state = self.get_state(guild_id)
+        self._touch_activity(guild_id)
         target = next((it for it in state.queue if it.item_id == item_id), None)
         if not target:
             raise KeyError("Item antrean tidak ditemukan.")
@@ -540,6 +576,7 @@ class QueueService:
         dj_role_id: str = "",
     ) -> QueueItemModel:
         state = self.get_state(guild_id)
+        self._touch_activity(guild_id)
         target = next((it for it in state.queue if it.item_id == item_id), None)
         if not target:
             raise KeyError("Item antrean tidak ditemukan.")
@@ -573,6 +610,7 @@ class QueueService:
         dj_role_id: str = "",
     ) -> QueueItemModel:
         state = self.get_state(guild_id)
+        self._touch_activity(guild_id)
         allowed, reason = can_control_queue(
             user_id=actor_id,
             user_roles=user_roles or [],
@@ -606,6 +644,7 @@ class QueueService:
         value: Optional[int | str | bool] = None,
     ) -> GuildQueueState:
         state = self.get_state(guild_id)
+        self._touch_activity(guild_id)
         allowed, reason = can_control_queue(
             user_id=actor_id,
             user_roles=user_roles or [],
@@ -706,6 +745,7 @@ class QueueService:
         arg3: object = None,
     ) -> str:
         state = self.get_state(guild_id)
+        self._touch_activity(guild_id)
         if arg3 is not None:
             departing_user_id = str(arg2 or "")
             raw_members = arg3 if isinstance(arg3, list) else []

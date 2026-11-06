@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.parse
 import urllib.request
 import uuid
@@ -386,8 +387,21 @@ END:VCALENDAR"""
 class AcademyService:
     """Layanan manajemen tugas akademik, sinkronisasi .ics Waskita/Moodle, dan auto-purge tugas lewat deadline."""
 
+    # Purge interval: max 1x per 5 minutes per guild
+    PURGE_INTERVAL_SEC = 300
+
     def __init__(self, db: Optional[DatabaseManager] = None) -> None:
         self.db = db or db_manager
+        self._last_purge: Dict[str, float] = {}  # guild_id -> timestamp
+
+    def _maybe_purge(self, guild_id: str, now: Optional[datetime] = None) -> int:
+        """Only run purge if enough time has passed since last purge for this guild."""
+        current_time = time.time()
+        last_purge_time = self._last_purge.get(guild_id, 0)
+        if current_time - last_purge_time < self.PURGE_INTERVAL_SEC:
+            return 0
+        self._last_purge[guild_id] = current_time
+        return self.purge_expired_tasks(guild_id, now=now)
 
     def is_main_guild(self, guild_id: str) -> bool:
         return str(guild_id or "").strip() == str(settings.main_guild_id or "1428666546942902294").strip()
@@ -484,7 +498,7 @@ class AcademyService:
     def list_tasks(self, guild_id: str, include_completed: bool = True) -> List[TaskRecord]:
         self.ensure_guild_exists(guild_id)
         # Hapus otomatis semua tugas yang sudah melewati deadline sebelum mengambil daftar
-        self.purge_expired_tasks(guild_id)
+        self._maybe_purge(guild_id)
 
         with self.db.transaction() as conn:
             if include_completed:
@@ -511,7 +525,7 @@ class AcademyService:
         timezone_name: str = "Asia/Jakarta",
     ) -> TaskRecord:
         self.ensure_guild_exists(guild_id)
-        self.purge_expired_tasks(guild_id)
+        self._maybe_purge(guild_id)
 
         task_id = f"tsk-{uuid.uuid4().hex[:10]}"
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -784,7 +798,7 @@ class AcademyService:
         allow_sample_fallback: bool = False,
     ) -> Dict[str, object]:
         # Bersihkan tugas yang sudah lewat deadline sebelum sinkronisasi
-        purged_count = self.purge_expired_tasks(guild_id)
+        purged_count = self._maybe_purge(guild_id)
 
         is_main = self.is_main_guild(guild_id)
         saved_db_ical = self.get_guild_saved_ical_url(guild_id)
@@ -864,7 +878,7 @@ class AcademyService:
         """
         self.ensure_guild_exists(guild_id)
         current_dt = datetime.now(timezone.utc)
-        self.purge_expired_tasks(guild_id, now=current_dt)
+        self._maybe_purge(guild_id, now=current_dt)
 
         parsed = parse_moodle_ics_content(ics_text, timezone_name, now=current_dt)
         now_iso = current_dt.isoformat()
@@ -951,7 +965,7 @@ class AcademyService:
         Menghapus seluruh tugas yang sudah lewat deadline dari DB, lalu mengambil tugas aktif (is_completed=0).
         """
         current = now or datetime.now(timezone.utc)
-        self.purge_expired_tasks(guild_id, now=current)
+        self._maybe_purge(guild_id, now=current)
 
         all_pending = self.list_tasks(guild_id, include_completed=False)
         active_tasks: List[TaskRecord] = []
@@ -1015,7 +1029,7 @@ class AcademyService:
             current = current.replace(tzinfo=timezone.utc)
 
         # Bersihkan tugas lewat deadline dari DB terlebih dahulu
-        self.purge_expired_tasks(guild_id, now=current)
+        self._maybe_purge(guild_id, now=current)
 
         deliveries_to_send: List[Dict[str, str]] = []
 

@@ -52,220 +52,68 @@
 
 ---
 
-## 📁 Struktur Proyek
+## 🎮 Discord Slash Commands (Bot)
 
-```
-athena-discord-bot/
-├── athenaa/                          # Python Backend (FastAPI + discord.py)
-│   ├── app/
-│   │   ├── main.py                   # Entrypoint: Bot + Uvicorn (single worker)
-│   │   ├── config.py                 # Load .env, feature flags, validation
-│   │   ├── database.py               # SQLite WAL, migrasi 15 tabel idempoten
-│   │   ├── cli_bridge.py             # CLI untuk backup, yt-dlp, test, zip
-│   │   ├── models/schema.py          # Dataclass: MusicSession, QueueItem, Task
-│   │   ├── security/validators.py    # Host Lock, SSRF, file validation, HMAC
-│   │   ├── services/
-│   │   │   ├── music_service.py      # Search YouTube/Spotify, radio, yt-dlp extract
-│   │   │   ├── queue_service.py      # QueueManager, race-condition guard
-│   │   │   ├── lyrics_service.py     # LRCLIB client (synced + plain, 429 handling)
-│   │   │   ├── academy_service.py    # .ics parser, UID dedup, reminder evaluator
-│   │   │   ├── leveling_service.py   # EXP formula, cooldown, leaderboard, AFK
-│   │   │   └── backup_service.py     # Snapshot, gzip, encrypt, rotate
-│   │   ├── bot/client.py             # discord.py Bot, slash commands, voice, EXP events
-│   │   └── web/routes/api.py         # FastAPI REST endpoints (music, academy, rpg, admin)
-│   ├── requirements.txt              # Python deps (VPS/Pterodactyl ready)
-│   ├── start.sh                      # Production startup script (single-instance)
-│   └── data/                         # SQLite DB, backups, modules (gitignored)
-│
-├── src/                              # React Frontend (TypeScript + Vite)
-│   ├── components/                   # MusicAndLyricsView, AcademyAndModulesView, RpgAndSettingsView, SearchDropdownBar, SpotifyBottomPlayer
-│   ├── lib/athenaaRules.ts           # Pure domain logic (EXP, Host Lock, LRC parser, .ics parser, validators)
-│   ├── types/athenaa.ts              # TypeScript interfaces (TrackItem, GuildMusicState, AcademicTask, LevelProfile, etc.)
-│   ├── utils/audioSynth.ts           # Browser audio engine (Web Audio API fallback)
-│   ├── App.tsx                       # Main app: 3-island layout (Library + Stage + Now Playing), OAuth2 modal, WS sync
-│   └── main.tsx                      # Entry point
-│
-├── server.ts                         # Node/Express + Vite dev server + WebSocket relay (dev only)
-├── package.json                      # npm scripts: dev, build, start, lint
-├── tsconfig.json, vite.config.ts
-├── .env                              # Production secrets (GITIGNORED)
-├── .env.example                      # Template (this file)
-├── .gitignore                        # Updated for deployment
-└── README.md                         # This file
-```
-
----
-
-## 🎮 Command & API Reference
-
-### Discord Slash Commands (Bot)
+### 🎵 Musik
 | Command | Description | Permission |
 |---------|-------------|------------|
-| `/play <query>` | Cari & putar lagu (YouTube/Spotify/Radio) | Semua |
-| `/queue` | Lihat antrean musik | Semua |
-| `/skip` | Skip lagu (Host Lock) | Host/DJ/Admin/Owner |
-| `/pause` / `/resume` | Pause/resume | Host/DJ/Admin/Owner |
-| `/stop` | Stop & clear queue | Host/DJ/Admin/Owner |
-| `/volume <1-100>` | Set volume | Host/DJ/Admin/Owner |
-| `/loop <off/one/queue>` | Set loop mode | Host/DJ/Admin/Owner |
-| `/autoplay <on/off>` | Toggle autoplay | Host/DJ/Admin/Owner |
-| `/radio <id>` | Putar radio (prambors/hardrockfm/genfm/lofigirl) | Semua |
-| `/lyrics` | Lirik sinkron LRCLIB | Semua |
-| `/search <query>` | Dropdown search lagu | Semua |
-| `/favorite add` | Simpan ke favorit | Semua |
-| `/playlist save` | Simpan antrean jadi playlist | Semua |
-| `/playlist play <id>` | Putar playlist | Semua |
-| `/task add` | Tambah tugas manual | Semua |
-| `/task list` | Lihat tugas aktif | Semua |
-| `/task sync` | Sync kalender Moodle .ics | Admin/Owner |
-| `/level` | Lihat level & EXP | Semua |
-| `/leaderboard` | Top 15 server | Semua |
-| `/afk <reason>` | Set status AFK | Semua |
-| `/admin backup` | Buat backup SQLite | Owner only |
-| `/admin test` | Jalankan test suite | Owner only |
+| `/play <query>` | Putar lagu dari judul/penyanyi, URL YouTube, Spotify Track/Playlist, atau Radio | Semua |
+| `/search <query>` | Cari lagu beserta nama penyanyi dari katalog YouTube & Spotify | Semua |
+| `/nowplaying` | Tampilkan panel lagu yang sedang diputar beserta tombol kontrol interaktif | Semua |
+| `/queue [page]` | Tampilkan daftar antrean lagu aktif dengan progress bar modern | Semua |
+| `/remove <posisi>` | Hapus lagu tertentu dari daftar antrean berdasarkan nomor urut | Host/DJ/Admin/Owner |
+| `/skip` | Lewati lagu saat ini di Voice Channel (Host Lock) | Host/DJ/Admin/Owner |
+| `/pause` | Jeda pemutaran lagu aktif (Host Lock) | Host/DJ/Admin/Owner |
+| `/resume` | Lanjutkan pemutaran lagu yang dijeda (Host Lock) | Host/DJ/Admin/Owner |
+| `/stop` | Hentikan pemutaran dan bersihkan antrean (Host Lock) | Host/DJ/Admin/Owner |
+| `/shuffle` | Acak urutan antrean musik (Host Lock) | Host/DJ/Admin/Owner |
+| `/volume <1-100>` | Atur volume suara bot antara 1% hingga 100% (Host Lock) | Host/DJ/Admin/Owner |
+| `/loop <off|one|queue>` | Atur mode pengulangan lagu atau antrean (Host Lock) | Host/DJ/Admin/Owner |
+| `/autoplay <true|false>` | Aktifkan/nonaktifkan pemutaran lagu lanjutan otomatis saat antrean habis (Host Lock) | Host/DJ/Admin/Owner |
+| `/247 <true|false>` | Pertahankan koneksi bot di voice channel selama 24/7 (Host Lock) | Host/DJ/Admin/Owner |
+| `/lyrics [judul]` | Tampilkan lirik tersinkronisasi atau teks dari LRCLIB | Semua |
+| `/leave` | Putuskan koneksi bot dari Voice Channel | Semua |
 
-### REST API Endpoints (Web Dashboard)
+### 📚 Akademik (Waskita/Moodle)
+| Command | Description | Permission |
+|---------|-------------|------------|
+| `/tugas` | Lihat daftar tugas kuliah aktif beserta countdown deadline WIB & file modul | Semua |
+| `/tugas_list` | Alias untuk `/tugas` | Semua |
+| `/tugas_add <mata_kuliah> <judul> <deadline_iso> [file_modul]` | Tambahkan tugas akademik baru secara manual beserta lampiran modul | Semua |
+| `/tugas_done <task_id>` | Tandai tugas selesai dan hentikan reminder berikutnya | Semua |
+| `/tugas_hapus <task_id>` | Hapus tugas dari database berdasarkan ID Tugas | Semua |
+| `/sync_waskita [ical_url]` | Sinkronkan tugas Waskita/Moodle (.ics atau Kredensial .env) | Admin/Owner |
+| `/sync_moodle [ical_url]` | Alias untuk `/sync_waskita` | Admin/Owner |
 
-#### Auth & Session
-- `GET /api/auth/session` — Cek session (Bearer token / cookie / query)
-- `POST /api/auth/logout` — Revoke session
-- `GET /api/auth/discord/url` — Dapatkan Discord OAuth2 authorize URL
-- `GET /auth/callback` — OAuth2 callback handler (popup + redirect)
+### 🎓 Mahasiswa
+| Command | Description | Permission |
+|---------|-------------|------------|
+| `/pomodoro [fokus_menit] [istirahat_menit] [topik]` | Mulai timer fokus belajar Pomodoro interaktif di Discord (+30 EXP) | Semua |
+| `/ipk <sks_nilai>` | Hitung simulasi IP/IPK semester dari format SKS:Nilai (mis. 3:A, 4:AB, 3:B+) | Semua |
+| `/kelompok <jumlah_kelompok> [daftar_nama]` | Acak pembagian kelompok tugas dari daftar nama atau anggota Voice Channel | Semua |
 
-#### Guilds & Settings
-- `GET /api/guilds` — List guild settings
-- `GET /api/guilds/:guildId/settings` — Get settings
-- `PATCH /api/guilds/:guildId/settings` — Update settings (admin only)
+### ⚔️ RPG Leveling & AFK
+| Command | Description | Permission |
+|---------|-------------|------------|
+| `/level [member]` | Lihat kartu profil Level, progres EXP, dan sumber EXP (Chat & Voice) | Semua |
+| `/leaderboard` | Tampilkan Top 15 Leaderboard Server (Chat, Join Voice, Speak, Listen, Stream) | Semua |
+| `/afk [alasan]` | Pasang status AFK dengan alasan opsional | Semua |
 
-#### Music
-- `GET /api/guilds/:guildId/music/state` — Full player state + radios
-- `GET /api/music/search?q=` — Search YouTube + curated catalog
-- `GET /api/music/lyrics?title=&artist=` — LRCLIB synced/plain lyrics
-- `POST /api/guilds/:guildId/music/play` — Add to queue / play now
-- `POST /api/guilds/:guildId/music/control` — pause/resume/skip/stop/clear/shuffle/play_item/remove_item/move_to_top/seek/volume/loop/autoplay/mode_247/host_transfer
+### 🎮 Minigames
+| Command | Description | Permission |
+|---------|-------------|------------|
+| `/kuis` | Mainkan kuis trivia interaktif untuk mahasiswa & pelajar (+25 EXP) | Semua |
+| `/mathbattle` | Tantangan hitung cepat matematika dengan hadiah +20 EXP | Semua |
+| `/suit <batu|gunting|kertas>` | Mainkan Batu-Gunting-Kertas melawan Athenaa (+15 EXP jika menang) | Semua |
+| `/8ball <pertanyaan>` | Tanyakan pertanyaan ke Kerang Ajaib Athenaa | Semua |
+| `/dadu [sisi]` | Lempar dadu keberuntungan (default 6 sisi, mendukung d20 / d100) | Semua |
 
-#### Library
-- `GET /api/guilds/:guildId/library` — Favorites + Playlists (with items)
-- `POST /api/favorites` — Add favorite
-- `DELETE /api/favorites/:id` — Remove favorite
-- `POST /api/guilds/:guildId/playlists/save-queue` — Save queue as playlist
-- `POST /api/guilds/:guildId/playlists/import-spotify` — Import Spotify playlist/album
-- `POST /api/guilds/:guildId/playlists/:id/play` — Play playlist
-- `DELETE /api/guilds/:guildId/playlists/:id` — Delete playlist
+### 🛠️ Utilitas
+| Command | Description | Permission |
+|---------|-------------|------------|
+| `/invite` | Dapatkan link invite resmi untuk mengundang Athenaa Bot ke server Discord lain | Semua |
 
-#### Academy
-- `GET /api/guilds/:guildId/tasks` — Tasks, reminders, attachments, moodle_env
-- `POST /api/guilds/:guildId/tasks` — Create manual task
-- `POST /api/tasks/:id/toggle` — Toggle complete
-- `DELETE /api/tasks/:id` — Delete task
-- `POST /api/guilds/:guildId/tasks/sync-ics` — Sync Moodle .ics (UID dedup)
-- `POST /api/guilds/:guildId/modules/upload` — Upload module (validated)
-- `GET /api/modules/:id/download` — Download module
-
-#### RPG & AFK
-- `GET /api/guilds/:guildId/rpg` — Leaderboard + AFK list
-- `POST /api/guilds/:guildId/rpg/activity` — Simulate activity & gain EXP (owner only)
-- `POST /api/guilds/:guildId/afk` — Set AFK
-- `DELETE /api/guilds/:guildId/afk/:userId` — Clear AFK
-
-#### Super-Admin (Owner Only, strict session verification)
-- `GET /api/admin/metrics` — System metrics, backups, audit logs
-- `POST /api/admin/backup` — Create encrypted backup
-- `POST /api/admin/yt-dlp` — Check/update yt-dlp
-- `POST /api/admin/run-tests` — Run pytest suite
-- `GET /api/python-codebase?file=` — View Python source file
-- `GET /api/python-codebase/download-zip` — Download full source ZIP
-
-### WebSocket Events (Real-time)
-- `MUSIC_STATE_UPDATE` — Full state broadcast (guild_id, state)
-- `POSITION_TICK` — Lightweight position_sec update (every 250ms server clock)
-
----
-
-## 💻 Kode & Logika Inti (Ringkasan)
-
-### 1. RPG EXP Formula (`src/lib/athenaaRules.ts`, `athenaa/app/services/leveling_service.py`)
-```typescript
-// max_exp = 100 + (level * 25)
-export function calculateMaxExp(level: number): number {
-  return 100 + Math.max(1, Math.floor(level)) * 25;
-}
-
-export function applyExpGain(currentLevel, currentExp, expGain) {
-  // loop while exp >= maxExp, level++, exp -= maxExp, recalc maxExp
-  return { leveledUp, level, currentExp, maxExp };
-}
-```
-
-### 2. Host Lock System (`src/lib/athenaaRules.ts`, `athenaa/app/security/validators.py`)
-```typescript
-export function canControlQueue(ctx: HostLockContext) {
-  if (ctx.isOwner || ctx.isAdmin) return { allowed: true, reason: 'Administrator/Owner' };
-  if (ctx.userRoles.includes(ctx.djRoleId)) return { allowed: true, reason: 'DJ Role' };
-  if (!ctx.sessionHostId || ctx.sessionHostId === ctx.userId) return { allowed: true, reason: 'Session Host' };
-  if (ctx.action === 'remove_item' && ctx.targetItemRequesterId === ctx.userId) return { allowed: true, reason: 'Own track' };
-  return { allowed: false, reason: 'Host Lock: hanya Session Host/DJ/Admin/Owner' };
-}
-```
-
-### 3. LRCLIB Synced Lyrics Parser (`src/lib/athenaaRules.ts`, `athenaa/app/services/lyrics_service.py`)
-```typescript
-export function parseLrcLyrics(rawLrc: string): SyncedLyricLine[] {
-  // Regex: [mm:ss.xxx]text → { timeSec, text }
-  // Sort by timeSec ascending
-}
-
-export function getActiveLyricIndex(lines, positionSec) {
-  // Binary search / linear scan untuk current line index
-}
-```
-
-### 4. Moodle .ics Parser & Filter (`src/lib/athenaaRules.ts`, `athenaa/app/services/academy_service.py`)
-```typescript
-export function isSubmittableOrDueTask({ summary, description, url, hasDueOrEndProp }) {
-  // EXCLUDE: /mod/resource/, /mod/folder/, /mod/page/, /mod/book/, /mod/label/
-  // EXCLUDE: "opens" tanpa "due/closes/kumpul"
-  // EXCLUDE: attendance/presensi tanpa task keywords
-  // EXCLUDE: materi/slide/bahan ajar tanpa turn-in keywords
-  // INCLUDE: /mod/assign/, /mod/quiz/, /mod/workshop/, /mod/turnitintool/
-  // INCLUDE: explicit keywords: "is due", "deadline", "tugas", "kumpul", "submit", "laporan", "praktikum", "kuis", "uts", "uas", "proyek", "tubes"
-}
-
-export function parseIcsEvents(icsText): ParsedIcsEvent[] {
-  // Unfold lines, parse VEVENT blocks, extract UID, SUMMARY, DTEND/DUE, DESCRIPTION, URL, CATEGORIES
-  // Filter via isSubmittableOrDueTask
-  // Return structured events with deadlineIso (UTC)
-}
-```
-
-### 5. 3-Stage Reminder Evaluator
-```typescript
-export function evaluateReminderStage(deadlineIso, nowMs, isCompleted, daysBefore=3) {
-  if (isCompleted) return null;
-  const hoursLeft = (deadlineMs - nowMs) / 3.6e6;
-  if (hoursLeft <= 1) return 'H-1h';
-  if (hoursLeft <= 6) return 'H-6h';
-  if (hoursLeft <= daysBefore * 24) return `H-${daysBefore}d`;
-  return null;
-}
-```
-
-### 6. Single-Session Discord Enforcement (`server.ts`, `athenaa/app/security/validators.py`)
-```typescript
-export function enforceSingleDiscordSession(activeByUserId, discordUserId, newSessionToken) {
-  const previousToken = activeByUserId.get(discordUserId) || null;
-  activeByUserId.set(discordUserId, newSessionToken);
-  return { previousTokenRevoked: previousToken !== newSessionToken ? previousToken : null, activeToken: newSessionToken };
-}
-```
-
-### 7. SQLite Backup + Encryption (`athenaa/app/services/backup_service.py`)
-```python
-# Online backup (non-blocking): sqlite3.backup()
-# Compress: gzip
-# Encrypt: AES-GCM (cryptography.fernet or custom)
-# Filename: athenaa_backup_YYYYMMDD_HHMMSS.sqlite.gz.enc
-```
+> **Catatan**: Fitur favorit, playlist, dan admin commands (backup, test) hanya tersedia via **Web Dashboard** (Super-Admin Hub), bukan sebagai Discord slash command.
 
 ---
 
@@ -525,12 +373,11 @@ Test suite mencakup: EXP formula, Host Lock, LRC parser, .ics parser, reminder s
 
 Proyek internal untuk server **TK1GACORKINK**. Kode sumber Python tersedia via dashboard (Owner only) atau ZIP download.
 
-**Sumber Kode (Source Code):**
 - **Repository Utama**: GitHub (private/internal)
 - **Python Backend**: Folder `athenaa/app/` — FastAPI, discord.py, services, bot client
 - **React Frontend**: Folder `src/` — TypeScript, React 19, Vite, Tailwind 4
 - **Shared Logic**: `src/lib/athenaaRules.ts` ↔ `athenaa/app/services/*.py` (parity TypeScript/Python)
-- **Database Schema**: `athenaa/app/database.py` (15 tabel: guild_settings, queue_items, favorites, playlists, tasks, task_attachments, reminder_deliveries, level_profiles, afk_statuses, audit_logs, discord_sessions, dll)
+- **Database Schema**: `athenaa/app/database.py` (15 tabel)
 - **Startup Script**: `athenaa/start.sh` (production single-instance)
 - **Dependencies**: `athenaa/requirements.txt` (Python), `package.json` (Node.js)
 

@@ -19,6 +19,7 @@ import subprocess
 import time
 import urllib.parse
 import urllib.request
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,69 @@ from app.config import settings
 from app.security.validators import validate_external_url
 
 logger = logging.getLogger("athenaa.music")
+
+
+class LRUCache:
+    """Thread-safe LRU cache with TTL support."""
+
+    def __init__(self, max_size: int = 500, ttl_seconds: int = 3600):
+        self.max_size = max_size
+        self.ttl = ttl_seconds
+        self._cache: OrderedDict[str, Tuple[Any, float]] = OrderedDict()
+
+    def get(self, key: str) -> Optional[Any]:
+        if key not in self._cache:
+            return None
+        value, timestamp = self._cache[key]
+        if time.time() - timestamp > self.ttl:
+            del self._cache[key]
+            return None
+        self._cache.move_to_end(key)
+        return value
+
+    def set(self, key: str, value: Any) -> None:
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        elif len(self._cache) >= self.max_size:
+            self._cache.popitem(last=False)  # Evict LRU
+        self._cache[key] = (value, time.time())
+
+    def pop(self, key: str, default: Any = None) -> Any:
+        if key in self._cache:
+            value, _ = self._cache.pop(key)
+            return value
+        return default
+
+    def clear_expired(self) -> int:
+        now = time.time()
+        expired = [k for k, (_, ts) in self._cache.items() if now - ts > self.ttl]
+        for k in expired:
+            del self._cache[k]
+        return len(expired)
+
+    def __contains__(self, key: str) -> bool:
+        if key not in self._cache:
+            return False
+        _, timestamp = self._cache[key]
+        if time.time() - timestamp > self.ttl:
+            del self._cache[key]
+            return False
+        return True
+
+    def __len__(self) -> int:
+        # Clean expired first
+        self.clear_expired()
+        return len(self._cache)
+
+    def __getitem__(self, key: str) -> Any:
+        value = self.get(key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.set(key, value)
+
 
 SPOTIFY_URL_RE = re.compile(
     r"^https?://open\.spotify\.com/(?:intl-[a-z]{2}/)?(track|album|playlist)/([A-Za-z0-9]+)",
@@ -269,7 +333,8 @@ def is_same_base_song(title_1: str, title_2: str) -> bool:
 # ==============================================================================
 # Registri Pemetaan Lagu -> Video ID Eksak (Tanpa Overwrite & Tanpa Substring Liar)
 # ==============================================================================
-_TRACK_META_REGISTRY: Dict[str, Dict[str, Any]] = {}
+# LRU Cache dengan max 2000 entry, TTL 1 jam
+_TRACK_META_REGISTRY = LRUCache(max_size=2000, ttl_seconds=3600)
 
 
 def _clean_search_slug(raw_query: str) -> str:
@@ -592,7 +657,8 @@ def get_recent_play_history_db(guild_id: str, limit: int = 60) -> List[Dict[str,
 # ==============================================================================
 # Filter Anti-Full-Album, Anti-Kompilasi & Anti-Video-Non-Musik
 # ==============================================================================
-_SEARCH_RESULT_CACHE: Dict[str, Tuple[float, List[TrackCandidate]]] = {}
+# LRU Cache untuk hasil pencarian YouTube: max 500 entry, TTL 15 menit
+_SEARCH_RESULT_CACHE = LRUCache(max_size=500, ttl_seconds=900)
 _SEARCH_CACHE_TTL_SEC = 900.0
 
 ALBUM_OR_NON_MUSIC_RE = re.compile(
@@ -844,7 +910,7 @@ def search_youtube_http(
 
     results = [cand for _, cand in scored_results[:limit]]
     if results:
-        _SEARCH_RESULT_CACHE[cache_key] = (now_m, list(results))
+        _SEARCH_RESULT_CACHE.set(cache_key, (now_m, list(results)))
     return results
 
 
@@ -1664,7 +1730,8 @@ def extract_with_ytdlp(query_or_url: str) -> Optional[TrackCandidate]:
         return None
 
 
-_STREAM_EXTRACT_CACHE: Dict[str, Tuple[float, Dict[str, object]]] = {}
+# LRU Cache untuk stream extraction: max 300 entry, TTL 30 menit
+_STREAM_EXTRACT_CACHE = LRUCache(max_size=300, ttl_seconds=1800)
 _STREAM_CACHE_TTL_SEC = 1800.0
 
 
@@ -1752,8 +1819,8 @@ def extract_playable_stream_ytdlp(query_or_url: str) -> Optional[Dict[str, objec
                     "user_agent": user_agent,
                     "acodec": str(cand.get("acodec") or ""),
                 }
-                _STREAM_EXTRACT_CACHE[cleaned_in] = (now_mono, result)
-                _STREAM_EXTRACT_CACHE[target] = (now_mono, result)
+                _STREAM_EXTRACT_CACHE.set(cleaned_in, (now_mono, result))
+                _STREAM_EXTRACT_CACHE.set(target, (now_mono, result))
                 return dict(result)
     except Exception:
         pass
@@ -1799,8 +1866,8 @@ def extract_playable_stream_ytdlp(query_or_url: str) -> Optional[Dict[str, objec
                     "user_agent": user_agent,
                     "acodec": str(cand.get("acodec") or ""),
                 }
-                _STREAM_EXTRACT_CACHE[cleaned_in] = (now_mono, result)
-                _STREAM_EXTRACT_CACHE[target] = (now_mono, result)
+                _STREAM_EXTRACT_CACHE.set(cleaned_in, (now_mono, result))
+                _STREAM_EXTRACT_CACHE.set(target, (now_mono, result))
                 return dict(result)
     except Exception:
         pass
