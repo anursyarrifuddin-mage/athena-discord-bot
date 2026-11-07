@@ -333,23 +333,30 @@ class QueueService:
         allow_network: bool = True,
     ) -> List[QueueItemModel]:
         """
-        Membangun kandidat Autoplay Mengalir Bebas (Pure Viral Radio Mix):
-        - Tidak pernah menyuntikkan katalog statis (Rock/Pop Indo) saat seed_track tersedia.
-        - Jika kandidat utama kosong, mencari live mix langsung dari lagu terakhir.
+        Membangun kandidat Autoplay Mengalir Bebas (Pure Viral Radio Mix + Fallback Katalog Terkurasi):
+        - Mengutamakan Radio Mix live dari lagu yang sedang/terakhir diputar.
+        - Menyediakan fallback katalog terkurasi agar Autoplay tidak pernah macet saat offline atau katalog habis.
         """
         candidates: List[QueueItemModel] = []
         state = self.get_state(guild_id)
+        seen_titles: Set[str] = set()
 
-        if seed_track is not None:
-            try:
-                from app.services.music_service import (
-                    _is_album_or_compilation,
-                    normalize_title_only,
-                    recommend_autoplay_tracks,
-                    search_youtube_http,
-                )
+        try:
+            from app.services.music_service import (
+                CURATED_YOUTUBE_SPOTIFY_CATALOG,
+                _is_album_or_compilation,
+                normalize_artist_only,
+                normalize_title_only,
+                recommend_autoplay_tracks,
+                search_youtube_http,
+            )
 
-                seed_norm_t = normalize_title_only(seed_track.title)
+            seed_norm_t = normalize_title_only(seed_track.title) if seed_track else ""
+            seed_norm_a = normalize_artist_only(seed_track.artist) if seed_track else ""
+            if seed_norm_t:
+                seen_titles.add(seed_norm_t)
+
+            if seed_track is not None and allow_network:
                 prev_context: List[Tuple[str, str]] = []
                 for r_trk in reversed(state.recent_tracks):
                     if normalize_title_only(r_trk.title) != seed_norm_t:
@@ -366,7 +373,6 @@ class QueueService:
                     previous_tracks=prev_context,
                 )
 
-                # Jika Radio Mix masih kosong, cari live lagu sejenis dari judul/penyanyi terakhir (BUKAN katalog statis!)
                 if not dynamic:
                     dynamic = search_youtube_http(
                         f"{seed_track.title} {seed_track.artist}",
@@ -377,8 +383,10 @@ class QueueService:
                 for idx, d_item in enumerate(dynamic, start=1):
                     if _is_album_or_compilation(d_item.title, int(d_item.duration_sec or 0)):
                         continue
-                    if normalize_title_only(d_item.title) == seed_norm_t:
+                    t_norm = normalize_title_only(d_item.title)
+                    if not t_norm or t_norm in seen_titles:
                         continue
+                    seen_titles.add(t_norm)
                     candidates.append(
                         QueueItemModel(
                             item_id=f"trk-auto-{uuid.uuid4().hex[:10]}",
@@ -398,8 +406,52 @@ class QueueService:
                             is_autoplay=True,
                         )
                     )
-            except Exception:
-                pass
+
+            # Fallback catalog so Autoplay never stalls when offline or after catalog exhaustion
+            same_artist_entries = []
+            other_entries = []
+            for entry in CURATED_YOUTUBE_SPOTIFY_CATALOG:
+                c_title = str(entry.get("title") or "").strip()
+                c_artist = str(entry.get("artist") or "").strip()
+                t_norm = normalize_title_only(c_title)
+                if not t_norm or t_norm in seen_titles:
+                    continue
+                if seed_norm_a and normalize_artist_only(c_artist) == seed_norm_a:
+                    same_artist_entries.append(entry)
+                else:
+                    other_entries.append(entry)
+
+            for entry in same_artist_entries + other_entries:
+                c_title = str(entry.get("title") or "").strip()
+                c_artist = str(entry.get("artist") or "").strip()
+                t_norm = normalize_title_only(c_title)
+                if not t_norm or t_norm in seen_titles:
+                    continue
+                seen_titles.add(t_norm)
+                candidates.append(
+                    QueueItemModel(
+                        item_id=f"trk-auto-{uuid.uuid4().hex[:10]}",
+                        guild_id=guild_id,
+                        position=len(candidates) + 1,
+                        title=c_title,
+                        artist=c_artist,
+                        album=str(entry.get("album") or "Spotify Autoplay"),
+                        duration_sec=int(entry.get("duration_sec") or 210),
+                        source_type="spotify_matched",
+                        source_url=str(
+                            entry.get("source_url")
+                            or f"https://www.youtube.com/results?search_query={c_title}+{c_artist}"
+                        ),
+                        stream_url="",
+                        thumbnail_url=str(entry.get("thumbnail_url") or ""),
+                        requester_id="system-autoplay",
+                        requester_name="Spotify Autoplay",
+                        added_at=_utc_now(),
+                        is_autoplay=True,
+                    )
+                )
+        except Exception:
+            pass
 
         return candidates
 
@@ -501,7 +553,7 @@ class QueueService:
                 self.notify_listeners(guild_id, "track_started")
                 return cand
 
-            if autoplay_candidates is None and candidates:
+            if candidates:
                 state.history_keys.clear()
                 if seed_ref:
                     _record_track_history(state, seed_ref)
@@ -731,11 +783,15 @@ class QueueService:
             state.autoplay = bool(value)
             if not state.autoplay:
                 self.prefetched_autoplay.pop(guild_id, None)
+                event_type = "autoplay_changed"
             elif state.current_track is None:
                 self.advance_track(guild_id)
                 return state
+            else:
+                event_type = "autoplay_changed"
         elif action == "mode_247":
             state.mode_247 = bool(value)
+            event_type = "mode_247_changed"
         elif action == "transfer_host":
             state.host_user_id = str(value or "")
             if not state.host_user_id:

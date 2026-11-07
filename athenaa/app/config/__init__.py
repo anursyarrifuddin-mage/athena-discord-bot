@@ -1,198 +1,211 @@
 """
-Athenaa Configuration Package.
-Provides environment-based configuration and YAML config loading.
+Konfigurasi Terpusat Aplikasi Athenaa (Discord Bot + Web Dashboard).
+Membaca seluruh variabel dari environment / file .env tanpa nilai kredensial hardcoded.
+Sistem Peran Per-Server: Admin Server, DJ, dan Member (tanpa ketergantungan OWNER_DISCORD_ID).
 """
+
+from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict
+from typing import List
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+DATA_DIR = BASE_DIR / "data"
+LOGS_DIR = BASE_DIR / "logs"
+MODULES_DIR = BASE_DIR / "modules"
+BACKUPS_DIR = DATA_DIR / "backups"
 
 
-def _load_dotenv_fallback(dotenv_path: Path) -> None:
-    """Memuat file .env secara aman bahkan jika python-dotenv belum terinstal."""
-    if not dotenv_path.exists():
+def _load_dotenv_if_present(env_path: Path) -> None:
+    """Memuat pasangan KEY=VALUE dari file .env lokal jika belum diset di os.environ."""
+    if not env_path.exists():
         return
-    try:
-        from dotenv import load_dotenv  # type: ignore
-        load_dotenv(dotenv_path)
-        return
-    except ImportError:
-        pass
-
-    for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
+    for raw_line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
-        key, _, value = line.partition("=")
+        key, value = line.split("=", 1)
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+        value = value.strip().strip("'").strip('"')
+        if key and (key not in os.environ or not os.environ.get(key)):
             os.environ[key] = value
 
 
-_load_dotenv_fallback(BASE_DIR / ".env")
-_load_dotenv_fallback(BASE_DIR.parent / ".env")
-
-PLACEHOLDER_VALUES = {
-    "",
-    "MY_GEMINI_API_KEY",
-    "MY_APP_URL",
-    "https://example.com",
-    "https://example.com/auth/callback",
-    "https://example.com/auth/google/callback",
-    "YOUR_DISCORD_TOKEN",
-    "CHANGE_ME",
-}
-
-
-def _clean_env(name: str, default: str = "") -> str:
-    val = os.environ.get(name, default).strip()
-    if val in PLACEHOLDER_VALUES:
-        return default if default not in PLACEHOLDER_VALUES else ""
-    return val
+_load_dotenv_if_present(BASE_DIR / ".env")
+_load_dotenv_if_present(BASE_DIR.parent / ".env")
 
 
 @dataclass(frozen=True)
-class AppConfig:
-    web_host: str = field(default_factory=lambda: os.environ.get("WEB_HOST", "0.0.0.0"))
-    web_port: int = field(default_factory=lambda: int(os.environ.get("WEB_PORT", "10031")))
-    web_base_url: str = field(default_factory=lambda: _clean_env("WEB_BASE_URL", "https://athenaa.my.id"))
+class AppSettings:
+    """Objek konfigurasi aplikasi yang divalidasi saat startup."""
 
-    discord_token: str = field(default_factory=lambda: _clean_env("DISCORD_TOKEN"))
-    discord_client_id: str = field(default_factory=lambda: _clean_env("DISCORD_CLIENT_ID"))
-    discord_client_secret: str = field(default_factory=lambda: _clean_env("DISCORD_CLIENT_SECRET"))
+    # Discord Bot & OAuth2
+    discord_token: str = field(default_factory=lambda: os.getenv("DISCORD_TOKEN", "").strip())
+    discord_client_id: str = field(default_factory=lambda: os.getenv("DISCORD_CLIENT_ID", "").strip())
+    discord_client_secret: str = field(default_factory=lambda: os.getenv("DISCORD_CLIENT_SECRET", "").strip())
     discord_redirect_uri: str = field(
-        default_factory=lambda: _clean_env("DISCORD_REDIRECT_URI", "https://athenaa.my.id/auth/callback")
+        default_factory=lambda: os.getenv(
+            "DISCORD_REDIRECT_URI", "http://localhost:3000/auth/discord/callback"
+        ).strip()
+    )
+    # Deprecated legacy field kept empty so per-server Admin / DJ / Member roles are used everywhere
+    owner_discord_id: str = ""
+    main_guild_id: str = field(
+        default_factory=lambda: os.getenv("MAIN_GUILD_ID", "1428666546942902294").strip() or "1428666546942902294"
+    )
+    dj_role_id: str = field(
+        default_factory=lambda: os.getenv("DJ_ROLE_ID", "1482041664024084691").strip() or "1482041664024084691"
+    )
+    task_reminder_channel_id: str = field(
+        default_factory=lambda: os.getenv("TASK_REMINDER_CHANNEL_ID", "1428666547701809160").strip()
+        or "1428666547701809160"
     )
 
-    main_guild_id: str = field(default_factory=lambda: _clean_env("MAIN_GUILD_ID"))
-    owner_discord_id: str = field(default_factory=lambda: _clean_env("OWNER_DISCORD_ID"))
-    dj_role_id: str = field(default_factory=lambda: _clean_env("DJ_ROLE_ID", "role-dj"))
-    task_reminder_channel_id: str = field(
-        default_factory=lambda: (
-            _clean_env("TASK_REMINDER_CHANNEL_ID")
-            or _clean_env("TASK_CHANNEL_ID")
-            or _clean_env("DISCORD_REMINDER_CHANNEL_ID")
-            or "1558142572164022362"
+    # Moodle / Waskita Automated Calendar & Login Sync
+    moodle_ical_url: str = field(default_factory=lambda: os.getenv("MOODLE_ICAL_URL", "").strip())
+    moodle_base_url: str = field(
+        default_factory=lambda: os.getenv("MOODLE_BASE_URL", "https://waskita.amikom.ac.id").strip().rstrip("/")
+    )
+    moodle_username: str = field(default_factory=lambda: os.getenv("MOODLE_USERNAME", "").strip())
+    moodle_password: str = field(default_factory=lambda: os.getenv("MOODLE_PASSWORD", "").strip())
+
+    # Google Classroom OAuth2 (Opsional)
+    google_client_id: str = field(default_factory=lambda: os.getenv("GOOGLE_CLIENT_ID", "").strip())
+    google_client_secret: str = field(default_factory=lambda: os.getenv("GOOGLE_CLIENT_SECRET", "").strip())
+    google_redirect_uri: str = field(
+        default_factory=lambda: os.getenv(
+            "GOOGLE_REDIRECT_URI", "http://localhost:3000/auth/google/callback"
+        ).strip()
+    )
+
+    # Web Server & Keamanan
+    web_host: str = field(default_factory=lambda: os.getenv("WEB_HOST", "0.0.0.0").strip() or "0.0.0.0")
+    web_port: int = field(
+        default_factory=lambda: int(
+            os.getenv("SERVER_PORT")
+            or os.getenv("WEB_PORT")
+            or "10031"
         )
     )
-
-    custom_logo_url: str = field(default_factory=lambda: _clean_env("CUSTOM_LOGO_URL"))
-    database_url: str = field(
-        default_factory=lambda: os.environ.get("DATABASE_URL", f"sqlite+aiosqlite:///{BASE_DIR / 'data' / 'athenaa.db'}")
+    web_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "WEB_BASE_URL",
+            f"http://localhost:{os.getenv('SERVER_PORT') or os.getenv('WEB_PORT') or '10031'}",
+        ).strip()
     )
-    sqlite_path: Path = field(
-        default_factory=lambda: Path(os.environ.get("SQLITE_PATH", str(BASE_DIR / "data" / "athenaa.db")))
+    custom_logo_url: str = field(
+        default_factory=lambda: os.getenv("CUSTOM_LOGO_URL", "/logo.png").strip() or "/logo.png"
     )
-    modules_dir: Path = field(
-        default_factory=lambda: Path(os.environ.get("MODULES_DIR", str(BASE_DIR / "modules")))
-    )
-    backups_dir: Path = field(
-        default_factory=lambda: Path(os.environ.get("BACKUPS_DIR", str(BASE_DIR / "data" / "backups")))
-    )
-    logs_dir: Path = field(
-        default_factory=lambda: Path(os.environ.get("LOGS_DIR", str(BASE_DIR / "logs")))
-    )
-
     session_secret: str = field(
-        default_factory=lambda: _clean_env("SESSION_SECRET", "athenaa-dev-ephemeral-session-key-change-in-prod")
+        default_factory=lambda: os.getenv("SESSION_SECRET", "").strip()
+        or "athenaa-default-session-secret-key-2026"
     )
     encryption_key: str = field(
-        default_factory=lambda: _clean_env("ENCRYPTION_KEY", "athenaa-dev-encryption-key-32bytes!")
+        default_factory=lambda: os.getenv("ENCRYPTION_KEY", "").strip()
+        or "athenaa-default-encryption-key-2026"
     )
     backup_encryption_key: str = field(
-        default_factory=lambda: _clean_env("BACKUP_ENCRYPTION_KEY", "athenaa-dev-backup-key-32bytes!!")
+        default_factory=lambda: os.getenv("BACKUP_ENCRYPTION_KEY", "").strip()
+        or "athenaa-default-backup-key-2026"
     )
 
-    default_timezone: str = field(default_factory=lambda: os.environ.get("DEFAULT_TIMEZONE", "Asia/Jakarta"))
-    max_attachment_mb: int = field(default_factory=lambda: int(os.environ.get("MAX_ATTACHMENT_MB", "15")))
-
-    moodle_base_url: str = field(default_factory=lambda: _clean_env("MOODLE_BASE_URL", "https://lms.kampus.ac.id"))
-    moodle_ical_url: str = field(default_factory=lambda: _clean_env("MOODLE_ICAL_URL"))
-    moodle_username: str = field(default_factory=lambda: _clean_env("MOODLE_USERNAME"))
-    moodle_password: str = field(default_factory=lambda: _clean_env("MOODLE_PASSWORD"))
-
-    google_client_id: str = field(default_factory=lambda: _clean_env("GOOGLE_CLIENT_ID"))
-    google_client_secret: str = field(default_factory=lambda: _clean_env("GOOGLE_CLIENT_SECRET"))
-    google_redirect_uri: str = field(
-        default_factory=lambda: _clean_env("GOOGLE_REDIRECT_URI", "http://localhost:10031/auth/google/callback")
+    # Database & Direktori Penyimpanan
+    database_url: str = field(
+        default_factory=lambda: os.getenv(
+            "DATABASE_URL", f"sqlite:///{(DATA_DIR / 'athenaa.db').as_posix()}"
+        ).strip()
     )
+    sqlite_path: Path = field(
+        default_factory=lambda: Path(
+            os.getenv("SQLITE_PATH", str(DATA_DIR / "athenaa.db"))
+        )
+    )
+    modules_dir: Path = field(default_factory=lambda: MODULES_DIR)
+    backups_dir: Path = field(default_factory=lambda: BACKUPS_DIR)
+    logs_dir: Path = field(default_factory=lambda: LOGS_DIR)
 
-    log_level: str = field(default_factory=lambda: os.environ.get("LOG_LEVEL", "INFO"))
+    # Operasional & Batasan File
+    default_timezone: str = field(
+        default_factory=lambda: os.getenv("DEFAULT_TIMEZONE", "Asia/Jakarta").strip() or "Asia/Jakarta"
+    )
+    max_attachment_mb: int = field(
+        default_factory=lambda: int(os.getenv("MAX_ATTACHMENT_MB", "15") or "15")
+    )
+    log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO").upper())
 
     def ensure_directories(self) -> None:
-        self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-        self.modules_dir.mkdir(parents=True, exist_ok=True)
-        self.backups_dir.mkdir(parents=True, exist_ok=True)
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        """Memastikan seluruh direktori penyimpanan lokal tersedia."""
+        for directory in (DATA_DIR, self.modules_dir, self.backups_dir, self.logs_dir):
+            directory.mkdir(parents=True, exist_ok=True)
 
-    def feature_readiness(self) -> Dict[str, bool]:
-        """Mengembalikan status kesiapan tiap subsistem berdasarkan kredensial nyata."""
-        return {
-            "discord_bot": bool(self.discord_token),
-            "discord_oauth": bool(self.discord_client_id and self.discord_client_secret),
-            "moodle_env": bool(self.moodle_ical_url or (self.moodle_username and self.moodle_password)),
-            "google_classroom": bool(self.google_client_id and self.google_client_secret),
-            "custom_encryption_key": "athenaa-dev-" not in self.encryption_key,
-            "custom_backup_key": "athenaa-dev-" not in self.backup_encryption_key,
-        }
+    def validate_startup(self) -> List[str]:
+        """Mengembalikan daftar peringatan konfigurasi tanpa menghentikan paksa server."""
+        warnings: List[str] = []
+        if not self.discord_token:
+            warnings.append(
+                "DISCORD_TOKEN belum diatur di .env. Web Dashboard & API tetap berjalan penuh; "
+                "isi DISCORD_TOKEN untuk mengaktifkan koneksi Voice & Slash Command bot Discord."
+            )
+        if not self.discord_client_id or not self.discord_client_secret:
+            warnings.append(
+                "DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET belum lengkap. Login OAuth2 Discord "
+                "akan menggunakan mode sesi lokal sampai kredensial OAuth2 diisi."
+            )
+        return warnings
 
 
-settings = AppConfig()
+settings = AppSettings()
 settings.ensure_directories()
 
 from .loader import (
-    ConfigLoader,
-    get_config_loader,
-    init_config,
+    load_constants,
+    load_radio_stations,
+    reload_all_configs,
+    get_curated_catalog,
+    get_curated_radio_pools,
+    get_indonesian_artists,
+    get_western_artists,
+    get_all_known_artists,
+    get_genre_keywords,
+    get_Artist_similarity_map,
+    get_block_patterns,
+    get_strip_patterns,
+    get_duration_limits,
+    get_viral_views_threshold,
     get_radio_stations,
-    get_enabled_radio_stations,
-    get_music_config,
-    get_discord_config,
-    get_academic_config,
-    get_backup_config,
-    get_database_config,
-    get_queue_config,
-    get_rate_limits,
-    get_logging_config,
-    RadioStation,
-    MusicConfig,
-    DiscordConfig,
-    AcademicConfig,
-    BackupConfig,
-    DatabaseConfig,
-    QueueConfig,
-    RateLimitConfig,
-    LoggingConfig,
-    AppConfig,
+    get_radio_station_by_key,
+    get_radio_stations_by_genre,
+    get_default_fallback_radio,
+    ConfigLoadError,
 )
 
 __all__ = [
-    "ConfigLoader",
-    "get_config_loader",
-    "init_config",
-    "get_radio_stations",
-    "get_enabled_radio_stations",
-    "get_music_config",
-    "get_discord_config",
-    "get_academic_config",
-    "get_backup_config",
-    "get_database_config",
-    "get_queue_config",
-    "get_rate_limits",
-    "get_logging_config",
-    "RadioStation",
-    "MusicConfig",
-    "DiscordConfig",
-    "AcademicConfig",
-    "BackupConfig",
-    "DatabaseConfig",
-    "QueueConfig",
-    "RateLimitConfig",
-    "LoggingConfig",
-    "AppConfig",
+    "AppSettings",
     "settings",
+    "BASE_DIR",
+    "DATA_DIR",
+    "LOGS_DIR",
+    "MODULES_DIR",
+    "BACKUPS_DIR",
+    "load_constants",
+    "load_radio_stations",
+    "reload_all_configs",
+    "get_curated_catalog",
+    "get_curated_radio_pools",
+    "get_indonesian_artists",
+    "get_western_artists",
+    "get_all_known_artists",
+    "get_genre_keywords",
+    "get_Artist_similarity_map",
+    "get_block_patterns",
+    "get_strip_patterns",
+    "get_duration_limits",
+    "get_viral_views_threshold",
+    "get_radio_stations",
+    "get_radio_station_by_key",
+    "get_radio_stations_by_genre",
+    "get_default_fallback_radio",
+    "ConfigLoadError",
 ]

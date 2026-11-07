@@ -138,11 +138,16 @@ export interface GuildSettings {
   updated_at: string;
 }
 
+export type ServerRoleType = 'admin' | 'dj' | 'member';
+
 export interface ActiveActorProfile {
   id: string;
   name: string;
+  role?: ServerRoleType;
   roleLabel: string;
   roles: string[];
+  hasDjRole?: boolean;
   isAdmin: boolean;
   isOwner: boolean;
 }
+

@@ -25,7 +25,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import httpx
+import asyncio
+
+try:
+    import httpx  # type: ignore
+except ImportError:
+    httpx = None  # type: ignore
 
 from app.config import settings
 from app.config.loader import get_enabled_radio_stations, get_music_config
@@ -36,46 +41,102 @@ logger = logging.getLogger("athenaa.music")
 # Load config from YAML
 _music_config = get_music_config()
 
-# Radio stations from config (replaces VERIFIED_RADIO_STATIONS)
-VERIFIED_RADIO_STATIONS = [
+DEFAULT_VERIFIED_RADIO_STATIONS: List[Dict[str, str]] = [
     {
-        "id": station.id,
-        "name": station.name,
-        "artist": station.artist,
-        "genre": station.genre,
-        "stream_url": station.stream_url,
-    }
-    for station in get_enabled_radio_stations()
+        "id": "prambors",
+        "key": "prambors",
+        "name": "Prambors FM 102.2 Jakarta",
+        "title": "Prambors FM 102.2 Jakarta",
+        "artist": "Indonesian & Global Top 40 Hits",
+        "genre": "Top 40 / Pop",
+        "stream_url": "https://s2.cloudmu.id/listen/prambors/radio.mp3",
+        "thumbnail_url": "/logo.png",
+    },
+    {
+        "id": "lofi",
+        "key": "lofi",
+        "name": "Lofi Hip Hop Radio — Beats to Study/Coding",
+        "title": "Lofi Hip Hop Radio — Beats to Study/Coding",
+        "artist": "Chillsky / Lofi 24/7",
+        "genre": "Lofi / Chillhop",
+        "stream_url": "https://lfhh.stream.laut.fm/lfhh",
+        "thumbnail_url": "/logo.png",
+    },
+    {
+        "id": "nightride",
+        "key": "nightride",
+        "name": "Nightride FM — Synthwave & Cyberpunk",
+        "title": "Nightride FM — Synthwave & Cyberpunk",
+        "artist": "Nightride 24/7 Stream",
+        "genre": "Synthwave / Electronic",
+        "stream_url": "https://stream.nightride.fm/nightride.m4a",
+        "thumbnail_url": "/logo.png",
+    },
+    {
+        "id": "chill",
+        "key": "chill",
+        "name": "SomaFM Groove Salad",
+        "title": "SomaFM Groove Salad",
+        "artist": "Ambient / Downtempo Beats",
+        "genre": "Ambient / Chillout",
+        "stream_url": "https://ice2.somafm.com/groovesalad-128-mp3",
+        "thumbnail_url": "/logo.png",
+    },
+    {
+        "id": "jpop",
+        "key": "jpop",
+        "name": "LISTEN.moe — Anime & J-Pop Radio",
+        "title": "LISTEN.moe — Anime & J-Pop Radio",
+        "artist": "24/7 J-Pop & Anime Stream",
+        "genre": "J-Pop / Anime",
+        "stream_url": "https://listen.moe/stream",
+        "thumbnail_url": "/logo.png",
+    },
 ]
+
+_loaded_stations = get_enabled_radio_stations()
+VERIFIED_RADIO_STATIONS: List[Dict[str, str]] = (
+    [
+        {
+            "id": station.id,
+            "key": station.id,
+            "name": station.name,
+            "title": station.name,
+            "artist": station.artist,
+            "genre": station.genre,
+            "stream_url": station.stream_url,
+            "thumbnail_url": "/logo.png",
+        }
+        for station in _loaded_stations
+    ]
+    if _loaded_stations
+    else list(DEFAULT_VERIFIED_RADIO_STATIONS)
+)
 
 # Constants from config
 MIN_SINGLE_DURATION_SEC = _music_config.min_single_duration_sec
 MAX_SINGLE_DURATION_SEC = _music_config.max_single_duration_sec
 MIN_VIRAL_VIEWS_THRESHOLD = _music_config.min_viral_views_threshold
 
-# Global async HTTP client for connection pooling
-_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
 
-
-def get_http_client() -> httpx.AsyncClient:
-    global _HTTP_CLIENT
-    if _HTTP_CLIENT is None or _HTTP_CLIENT.is_closed:
-        _HTTP_CLIENT = httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0, connect=5.0),
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-            headers={
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-            },
-        )
-    return _HTTP_CLIENT
+def _http_get_text(url: str, timeout: float = 5.5) -> str:
+    """Thread-safe HTTP GET helper that never conflicts across asyncio event loops."""
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", errors="ignore")
 
 
 async def close_http_client() -> None:
-    global _HTTP_CLIENT
-    if _HTTP_CLIENT and not _HTTP_CLIENT.is_closed:
-        await _HTTP_CLIENT.aclose()
-        _HTTP_CLIENT = None
+    return None
 
 
 class LRUCache:
@@ -178,36 +239,36 @@ def get_verified_radios() -> List[Dict[str, str]]:
 
 # Katalog 30 Lagu Satuan Populer (Tanpa Fake Video ID agar saat diputar selalu mencari stream aslinya)
 CURATED_YOUTUBE_SPOTIFY_CATALOG: List[Dict[str, Any]] = [
-    {"title": "Cincin", "artist": "Hindia", "album": "Lagipula Hidup Akan Berakhir", "duration_sec": 266, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/QqJ-Vp8mvbk/hqdefault.jpg", "genre": "indie_indo"},
-    {"title": "Evaluasi", "artist": "Hindia", "album": "Menari Dengan Bayangan", "duration_sec": 194, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/QqJ-Vp8mvbk/hqdefault.jpg", "genre": "indie_indo"},
-    {"title": "Secukupnya", "artist": "Hindia", "album": "Menari Dengan Bayangan", "duration_sec": 205, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/_N6vSc_mT6I/hqdefault.jpg", "genre": "indie_indo"},
-    {"title": "Rumah Ke Rumah", "artist": "Hindia", "album": "Menari Dengan Bayangan", "duration_sec": 277, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/QqJ-Vp8mvbk/hqdefault.jpg", "genre": "indie_indo"},
-    {"title": "Kita Ke Sana", "artist": "Hindia", "album": "Lagipula Hidup Akan Berakhir", "duration_sec": 248, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/_N6vSc_mT6I/hqdefault.jpg", "genre": "indie_indo"},
-    {"title": "Untungnya, Hidup Harus Tetap Berjalan", "artist": "Bernadya", "album": "Sialnya, Hidup Harus Tetap Berjalan", "duration_sec": 184, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/ba-XAIskH_g/hqdefault.jpg", "genre": "indie_indo"},
-    {"title": "Satu Bulan", "artist": "Bernadya", "album": "Terlintas", "duration_sec": 200, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/ba-XAIskH_g/hqdefault.jpg", "genre": "indie_indo"},
-    {"title": "Kata Mereka Ini Berlebihan", "artist": "Bernadya", "album": "Sialnya, Hidup Harus Tetap Berjalan", "duration_sec": 191, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/ba-XAIskH_g/hqdefault.jpg", "genre": "indie_indo"},
-    {"title": "Sial", "artist": "Mahalini", "album": "Fabula", "duration_sec": 243, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/_N6vSc_mT6I/hqdefault.jpg", "genre": "pop_indo"},
-    {"title": "Mati-Matian", "artist": "Mahalini", "album": "Single", "duration_sec": 244, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/_N6vSc_mT6I/hqdefault.jpg", "genre": "pop_indo"},
-    {"title": "Bawa Dia Kembali", "artist": "Mahalini", "album": "Fabula", "duration_sec": 228, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/_N6vSc_mT6I/hqdefault.jpg", "genre": "pop_indo"},
-    {"title": "Monokrom", "artist": "Tulus", "album": "Monokrom", "duration_sec": 214, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/watch?v=QqJ-Vp8mvbk", "thumbnail_url": "https://i.ytimg.com/vi/QqJ-Vp8mvbk/hqdefault.jpg", "genre": "pop_indo"},
-    {"title": "Hati-Hati di Jalan", "artist": "Tulus", "album": "Manusia", "duration_sec": 242, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/watch?v=_N6vSc_mT6I", "thumbnail_url": "https://i.ytimg.com/vi/_N6vSc_mT6I/hqdefault.jpg", "genre": "pop_indo"},
+    {"title": "Cincin", "artist": "Hindia", "album": "Lagipula Hidup Akan Berakhir", "duration_sec": 266, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Hindia+Cincin+official+audio", "thumbnail_url": "/logo.png", "genre": "indie_indo"},
+    {"title": "Evaluasi", "artist": "Hindia", "album": "Menari Dengan Bayangan", "duration_sec": 194, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Hindia+Evaluasi+official+audio", "thumbnail_url": "/logo.png", "genre": "indie_indo"},
+    {"title": "Secukupnya", "artist": "Hindia", "album": "Menari Dengan Bayangan", "duration_sec": 205, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/watch?v=QqJ-Vp8mvbk", "thumbnail_url": "https://i.ytimg.com/vi/QqJ-Vp8mvbk/hqdefault.jpg", "genre": "indie_indo"},
+    {"title": "Rumah Ke Rumah", "artist": "Hindia", "album": "Menari Dengan Bayangan", "duration_sec": 277, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Hindia+Rumah+Ke+Rumah+official+audio", "thumbnail_url": "/logo.png", "genre": "indie_indo"},
+    {"title": "Kita Ke Sana", "artist": "Hindia", "album": "Lagipula Hidup Akan Berakhir", "duration_sec": 248, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Hindia+Kita+Ke+Sana+official+audio", "thumbnail_url": "/logo.png", "genre": "indie_indo"},
+    {"title": "Untungnya, Hidup Harus Tetap Berjalan", "artist": "Bernadya", "album": "Sialnya, Hidup Harus Tetap Berjalan", "duration_sec": 184, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Bernadya+Untungnya+Hidup+Harus+Tetap+Berjalan+official+audio", "thumbnail_url": "/logo.png", "genre": "indie_indo"},
+    {"title": "Satu Bulan", "artist": "Bernadya", "album": "Terlintas", "duration_sec": 200, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Bernadya+Satu+Bulan+official+audio", "thumbnail_url": "/logo.png", "genre": "indie_indo"},
+    {"title": "Kata Mereka Ini Berlebihan", "artist": "Bernadya", "album": "Sialnya, Hidup Harus Tetap Berjalan", "duration_sec": 191, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Bernadya+Kata+Mereka+Ini+Berlebihan+official+audio", "thumbnail_url": "/logo.png", "genre": "indie_indo"},
+    {"title": "Sial", "artist": "Mahalini", "album": "Fabula", "duration_sec": 243, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/watch?v=_N6vSc_mT6I", "thumbnail_url": "https://i.ytimg.com/vi/_N6vSc_mT6I/hqdefault.jpg", "genre": "pop_indo"},
+    {"title": "Mati-Matian", "artist": "Mahalini", "album": "Single", "duration_sec": 244, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Mahalini+Mati-Matian+official+audio", "thumbnail_url": "/logo.png", "genre": "pop_indo"},
+    {"title": "Bawa Dia Kembali", "artist": "Mahalini", "album": "Fabula", "duration_sec": 228, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Mahalini+Bawa+Dia+Kembali+official+audio", "thumbnail_url": "/logo.png", "genre": "pop_indo"},
+    {"title": "Monokrom", "artist": "Tulus", "album": "Monokrom", "duration_sec": 214, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Tulus+Monokrom+official+audio", "thumbnail_url": "/logo.png", "genre": "pop_indo"},
+    {"title": "Hati-Hati di Jalan", "artist": "Tulus", "album": "Manusia", "duration_sec": 242, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Tulus+Hati-Hati+di+Jalan+official+audio", "thumbnail_url": "/logo.png", "genre": "pop_indo"},
     {"title": "Lantas", "artist": "Juicy Luicy", "album": "Sentimental", "duration_sec": 234, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/watch?v=ba-XAIskH_g", "thumbnail_url": "https://i.ytimg.com/vi/ba-XAIskH_g/hqdefault.jpg", "genre": "pop_indo"},
-    {"title": "Sialan", "artist": "Adrian Khalif, Juicy Luicy", "album": "Nonfiksi", "duration_sec": 241, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/ba-XAIskH_g/hqdefault.jpg", "genre": "pop_indo"},
-    {"title": "Tampar", "artist": "Juicy Luicy", "album": "Nonfiksi", "duration_sec": 218, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/ba-XAIskH_g/hqdefault.jpg", "genre": "pop_indo"},
-    {"title": "Gala Bunga Matahari", "artist": "Sal Priadi", "album": "MARKERS AND SUCH PENS FLASHDISKS", "duration_sec": 209, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/_N6vSc_mT6I/hqdefault.jpg", "genre": "indie_indo"},
-    {"title": "Bertaut", "artist": "Nadin Amizah", "album": "Selamat Ulang Tahun", "duration_sec": 316, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/ba-XAIskH_g/hqdefault.jpg", "genre": "indie_indo"},
-    {"title": "Sorai", "artist": "Nadin Amizah", "album": "Sorai", "duration_sec": 278, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/ba-XAIskH_g/hqdefault.jpg", "genre": "indie_indo"},
-    {"title": "Serana", "artist": "for Revenge", "album": "Perayaan Patah Hati", "duration_sec": 245, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/ba-XAIskH_g/hqdefault.jpg", "genre": "rock_alt"},
-    {"title": "Jakarta Hari Ini", "artist": "for Revenge, Stereo Wall", "album": "Perayaan Patah Hati", "duration_sec": 225, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/pBZs_Py-1_0/hqdefault.jpg", "genre": "rock_alt"},
-    {"title": "Nina", "artist": ".Feast", "album": "Membangun & Menghancurkan", "duration_sec": 262, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/QqJ-Vp8mvbk/hqdefault.jpg", "genre": "indie_indo"},
-    {"title": "Penjaga Hati", "artist": "Nadhif Basalamah", "album": "Nadhif", "duration_sec": 260, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/_N6vSc_mT6I/hqdefault.jpg", "genre": "pop_indo"},
-    {"title": "Komang", "artist": "Raim Laode", "album": "Komang", "duration_sec": 222, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/_N6vSc_mT6I/hqdefault.jpg", "genre": "pop_indo"},
+    {"title": "Sialan", "artist": "Adrian Khalif, Juicy Luicy", "album": "Nonfiksi", "duration_sec": 241, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Adrian+Khalif+Juicy+Luicy+Sialan+official+audio", "thumbnail_url": "/logo.png", "genre": "pop_indo"},
+    {"title": "Tampar", "artist": "Juicy Luicy", "album": "Nonfiksi", "duration_sec": 218, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Juicy+Luicy+Tampar+official+audio", "thumbnail_url": "/logo.png", "genre": "pop_indo"},
+    {"title": "Gala Bunga Matahari", "artist": "Sal Priadi", "album": "MARKERS AND SUCH PENS FLASHDISKS", "duration_sec": 209, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Sal+Priadi+Gala+Bunga+Matahari+official+audio", "thumbnail_url": "/logo.png", "genre": "indie_indo"},
+    {"title": "Bertaut", "artist": "Nadin Amizah", "album": "Selamat Ulang Tahun", "duration_sec": 316, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Nadin+Amizah+Bertaut+official+audio", "thumbnail_url": "/logo.png", "genre": "indie_indo"},
+    {"title": "Sorai", "artist": "Nadin Amizah", "album": "Sorai", "duration_sec": 278, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Nadin+Amizah+Sorai+official+audio", "thumbnail_url": "/logo.png", "genre": "indie_indo"},
+    {"title": "Serana", "artist": "for Revenge", "album": "Perayaan Patah Hati", "duration_sec": 245, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=for+Revenge+Serana+official+audio", "thumbnail_url": "/logo.png", "genre": "rock_alt"},
+    {"title": "Jakarta Hari Ini", "artist": "for Revenge, Stereo Wall", "album": "Perayaan Patah Hati", "duration_sec": 225, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=for+Revenge+Jakarta+Hari+Ini+official+audio", "thumbnail_url": "/logo.png", "genre": "rock_alt"},
+    {"title": "Nina", "artist": ".Feast", "album": "Membangun & Menghancurkan", "duration_sec": 262, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Feast+Nina+official+audio", "thumbnail_url": "/logo.png", "genre": "indie_indo"},
+    {"title": "Penjaga Hati", "artist": "Nadhif Basalamah", "album": "Nadhif", "duration_sec": 260, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Nadhif+Basalamah+Penjaga+Hati+official+audio", "thumbnail_url": "/logo.png", "genre": "pop_indo"},
+    {"title": "Komang", "artist": "Raim Laode", "album": "Komang", "duration_sec": 222, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Raim+Laode+Komang+official+audio", "thumbnail_url": "/logo.png", "genre": "pop_indo"},
     {"title": "Dan", "artist": "Sheila On 7", "album": "Sheila On 7", "duration_sec": 286, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/watch?v=pBZs_Py-1_0", "thumbnail_url": "https://i.ytimg.com/vi/pBZs_Py-1_0/hqdefault.jpg", "genre": "pop_indo"},
-    {"title": "Die With A Smile", "artist": "Lady Gaga, Bruno Mars", "album": "Single", "duration_sec": 251, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/QqJ-Vp8mvbk/hqdefault.jpg", "genre": "rnb_hiphop"},
-    {"title": "luther", "artist": "Kendrick Lamar, SZA", "album": "GNX", "duration_sec": 177, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/QqJ-Vp8mvbk/hqdefault.jpg", "genre": "rnb_hiphop"},
-    {"title": "we can't be friends (wait for your love)", "artist": "Ariana Grande", "album": "eternal sunshine", "duration_sec": 228, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/QqJ-Vp8mvbk/hqdefault.jpg", "genre": "rnb_hiphop"},
-    {"title": "BIRDS OF A FEATHER", "artist": "Billie Eilish", "album": "HIT ME HARD AND SOFT", "duration_sec": 210, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/QqJ-Vp8mvbk/hqdefault.jpg", "genre": "rnb_hiphop"},
-    {"title": "Blinding Lights", "artist": "The Weeknd", "album": "After Hours", "duration_sec": 200, "source_type": "spotify_matched", "source_url": "", "thumbnail_url": "https://i.ytimg.com/vi/QqJ-Vp8mvbk/hqdefault.jpg", "genre": "rnb_hiphop"},
+    {"title": "Die With A Smile", "artist": "Lady Gaga, Bruno Mars", "album": "Single", "duration_sec": 251, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Lady+Gaga+Bruno+Mars+Die+With+A+Smile+official+audio", "thumbnail_url": "/logo.png", "genre": "rnb_hiphop"},
+    {"title": "luther", "artist": "Kendrick Lamar, SZA", "album": "GNX", "duration_sec": 177, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Kendrick+Lamar+SZA+luther+official+audio", "thumbnail_url": "/logo.png", "genre": "rnb_hiphop"},
+    {"title": "we can't be friends (wait for your love)", "artist": "Ariana Grande", "album": "eternal sunshine", "duration_sec": 228, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Ariana+Grande+we+cant+be+friends+official+audio", "thumbnail_url": "/logo.png", "genre": "rnb_hiphop"},
+    {"title": "BIRDS OF A FEATHER", "artist": "Billie Eilish", "album": "HIT ME HARD AND SOFT", "duration_sec": 210, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=Billie+Eilish+BIRDS+OF+A+FEATHER+official+audio", "thumbnail_url": "/logo.png", "genre": "rnb_hiphop"},
+    {"title": "Blinding Lights", "artist": "The Weeknd", "album": "After Hours", "duration_sec": 200, "source_type": "spotify_matched", "source_url": "https://www.youtube.com/results?search_query=The+Weeknd+Blinding+Lights+official+audio", "thumbnail_url": "/logo.png", "genre": "rnb_hiphop"},
 ]
 
 
@@ -757,29 +818,7 @@ def _search_youtube_with_views(
     studio_master_only: bool = False,
 ) -> List[Tuple[int, TrackCandidate]]:
     """
-    SYNC wrapper for backward compatibility - calls async version.
-    For new code, use _search_youtube_with_views_async directly.
-    """
-    import asyncio
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(
-        _search_youtube_with_views_async(query, limit, default_source_type, min_views, studio_master_only)
-    )
-
-
-async def _search_youtube_with_views_async(
-    query: str,
-    limit: int = 25,
-    default_source_type: str = "spotify_matched",
-    min_views: int = 0,
-    studio_master_only: bool = False,
-) -> List[Tuple[int, TrackCandidate]]:
-    """
-    Mencari single track di YouTube menggunakan async HTTP client (httpx).
+    Mencari single track di YouTube secara thread-safe tanpa konflik event loop.
     Menyimpan `source_url = https://www.youtube.com/watch?v={video_id}`
     dengan `source_type = 'spotify_matched'` agar client.py memutar 100% video tersebut tanpa salah lagu!
     """
@@ -805,9 +844,7 @@ async def _search_youtube_with_views_async(
     seen_base_titles: Set[str] = set()
 
     try:
-        client = get_http_client()
-        resp = await client.get(url, timeout=5.5)
-        page_html = resp.text
+        page_html = _http_get_text(url, timeout=5.5)
 
         match = re.search(r"var\s+ytInitialData\s*=\s*(\{.+?\});</script>", page_html)
         if not match:
@@ -873,8 +910,6 @@ async def _search_youtube_with_views_async(
                 seen_base_titles.add(base_key)
 
                 thumb_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-                # KUNCI UTAMA: Gunakan watch URL langsung di source_url agar client.py mengekstrak
-                # video_id yang 100% sama persis, sementara source_type tetap 'spotify_matched'!
                 direct_watch_url = f"https://www.youtube.com/watch?v={video_id}"
 
                 _register_track_meta(
@@ -920,26 +955,24 @@ async def _search_youtube_with_views_async(
         return []
 
 
-def search_youtube_http(
+async def _search_youtube_with_views_async(
     query: str,
     limit: int = 25,
     default_source_type: str = "spotify_matched",
     min_views: int = 0,
-    prefer_popular: bool = True,
-) -> List[TrackCandidate]:
-    """SYNC wrapper for backward compatibility."""
-    import asyncio
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(
-        search_youtube_http_async(query, limit, default_source_type, min_views, prefer_popular)
+    studio_master_only: bool = False,
+) -> List[Tuple[int, TrackCandidate]]:
+    return await asyncio.to_thread(
+        _search_youtube_with_views,
+        query,
+        limit,
+        default_source_type,
+        min_views,
+        studio_master_only,
     )
 
 
-async def search_youtube_http_async(
+def search_youtube_http(
     query: str,
     limit: int = 25,
     default_source_type: str = "spotify_matched",
@@ -956,7 +989,7 @@ async def search_youtube_http_async(
     if cached_hit and (now_m - cached_hit[0]) < _SEARCH_CACHE_TTL_SEC:
         return list(cached_hit[1])
 
-    scored_results = await _search_youtube_with_views_async(
+    scored_results = _search_youtube_with_views(
         cleaned,
         limit=limit,
         default_source_type=default_source_type,
@@ -972,6 +1005,23 @@ async def search_youtube_http_async(
     if results:
         _SEARCH_RESULT_CACHE.set(cache_key, (now_m, list(results)))
     return results
+
+
+async def search_youtube_http_async(
+    query: str,
+    limit: int = 25,
+    default_source_type: str = "spotify_matched",
+    min_views: int = 0,
+    prefer_popular: bool = True,
+) -> List[TrackCandidate]:
+    return await asyncio.to_thread(
+        search_youtube_http,
+        query,
+        limit,
+        default_source_type,
+        min_views,
+        prefer_popular,
+    )
 
 
 def _resolve_seed_video_id(title: str, artist: str, video_id_hint: str = "") -> str:
@@ -997,26 +1047,7 @@ def _resolve_seed_video_id(title: str, artist: str, video_id_hint: str = "") -> 
 
 
 async def _resolve_seed_video_id_async(title: str, artist: str, video_id_hint: str = "") -> str:
-    """Async version of _resolve_seed_video_id."""
-    if video_id_hint and len(video_id_hint) == 11:
-        return video_id_hint
-    reg_vid = _extract_vid_from_url_or_registry("", title=title, artist=artist)
-    if reg_vid and len(reg_vid) == 11:
-        return reg_vid
-
-    q_str = f"{artist} {title}".strip() if artist and artist.lower() != "spotify artist" else title
-    scored = await _search_youtube_with_views_async(
-        q_str,
-        limit=2,
-        default_source_type="spotify_matched",
-        studio_master_only=False,
-    )
-    if scored:
-        cand = scored[0][1]
-        found_vid = _extract_vid_from_url_or_registry(cand.source_url, cand.title, cand.artist)
-        if found_vid:
-            return found_vid
-    return ""
+    return await asyncio.to_thread(_resolve_seed_video_id, title, artist, video_id_hint)
 
 
 def _fetch_live_radio_graph_for_track(
@@ -1026,31 +1057,11 @@ def _fetch_live_radio_graph_for_track(
     max_items: int = 30,
 ) -> List[Tuple[int, TrackCandidate]]:
     """
-    SYNC wrapper for backward compatibility.
-    """
-    import asyncio
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(
-        _fetch_live_radio_graph_for_track_async(title, artist, video_id_hint, max_items)
-    )
-
-
-async def _fetch_live_radio_graph_for_track_async(
-    title: str,
-    artist: str,
-    video_id_hint: str = "",
-    max_items: int = 30,
-) -> List[Tuple[int, TrackCandidate]]:
-    """
-    Menarik daftar lagu khusus dari Panel Radio Mix Musik (RD{vid}).
+    Menarik daftar lagu khusus dari Panel Radio Mix Musik (RD{vid}) secara thread-safe.
     Setiap kandidat menyimpan `source_url = https://www.youtube.com/watch?v={c_vid}`
     dan `source_type = 'spotify_matched'` sehingga audio yang diputar 100% lagu tersebut!
     """
-    vid = await _resolve_seed_video_id_async(title, artist, video_id_hint=video_id_hint)
+    vid = _resolve_seed_video_id(title, artist, video_id_hint=video_id_hint)
     if not vid:
         return []
 
@@ -1058,9 +1069,7 @@ async def _fetch_live_radio_graph_for_track_async(
     extracted: List[Tuple[int, TrackCandidate]] = []
 
     try:
-        client = get_http_client()
-        resp = await client.get(mix_url, timeout=5.5)
-        page_html = resp.text
+        page_html = _http_get_text(mix_url, timeout=5.5)
 
         match = re.search(r"var\s+ytInitialData\s*=\s*(\{.+?\});</script>", page_html)
         if not match:
@@ -1199,6 +1208,21 @@ async def _fetch_live_radio_graph_for_track_async(
     return extracted
 
 
+async def _fetch_live_radio_graph_for_track_async(
+    title: str,
+    artist: str,
+    video_id_hint: str = "",
+    max_items: int = 30,
+) -> List[Tuple[int, TrackCandidate]]:
+    return await asyncio.to_thread(
+        _fetch_live_radio_graph_for_track,
+        title,
+        artist,
+        video_id_hint,
+        max_items,
+    )
+
+
 def recommend_autoplay_tracks(
     seed_title: str,
     seed_artist: str,
@@ -1207,28 +1231,8 @@ def recommend_autoplay_tracks(
     guild_id: str = "",
     previous_tracks: Optional[List[Tuple[str, str]]] = None,
 ) -> List[TrackCandidate]:
-    """SYNC wrapper for backward compatibility."""
-    import asyncio
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(
-        recommend_autoplay_tracks_async(seed_title, seed_artist, exclude_keys, limit, guild_id, previous_tracks)
-    )
-
-
-async def recommend_autoplay_tracks_async(
-    seed_title: str,
-    seed_artist: str,
-    exclude_keys: Optional[Any] = None,
-    limit: int = 5,
-    guild_id: str = "",
-    previous_tracks: Optional[List[Tuple[str, str]]] = None,
-) -> List[TrackCandidate]:
     """
-    Pure Organic Viral Autoplay:
+    Pure Organic Viral Autoplay (Thread-safe synchronous implementation):
     - Mengikuti rantai Radio Mix (RD{video_id}) dari Lagu B (saat ini) dan Lagu A (sebelumnya).
     - Mencegah Autoplay terjebak pada 1 penyanyi/band yang sama terus-menerus (jika Lagu A dan Lagu B
       sudah dari artis yang sama, artis lain yang se-frekuensi di Radio Mix diprioritaskan).
@@ -1290,10 +1294,10 @@ async def recommend_autoplay_tracks_async(
                 track_a_vid = _extract_vid_from_url_or_registry("", title=p_title, artist=p_artist)
                 break
 
-    graph_b = await _fetch_live_radio_graph_for_track_async(seed_title, seed_artist, video_id_hint=track_b_vid, max_items=30)
+    graph_b = _fetch_live_radio_graph_for_track(seed_title, seed_artist, video_id_hint=track_b_vid, max_items=30)
     graph_a: List[Tuple[int, TrackCandidate]] = []
     if track_a_title:
-        graph_a = await _fetch_live_radio_graph_for_track_async(track_a_title, track_a_artist, video_id_hint=track_a_vid, max_items=20)
+        graph_a = _fetch_live_radio_graph_for_track(track_a_title, track_a_artist, video_id_hint=track_a_vid, max_items=20)
 
     candidate_map: Dict[str, Tuple[int, TrackCandidate]] = {}
     base_titles_in_a: Set[str] = set()
@@ -1311,11 +1315,8 @@ async def recommend_autoplay_tracks_async(
         if not bt_b:
             continue
         bonus = 0
-        # Lagu yang muncul di irisan Radio Mix Lagu A dan Lagu B mendapat prioritas tertinggi
         if bt_b in base_titles_in_a:
             bonus += 1_800_000
-        # Jika sudah memutar >= 2 lagu berturut-turut dari artis yang sama, kurangi bobot artis tersebut
-        # agar Autoplay mengalir ke penyanyi/band se-vibe lainnya di Radio Mix!
         if norm_b_artist and art_b == norm_b_artist:
             if recent_artist_streak >= 2:
                 bonus -= 900_000
@@ -1328,7 +1329,7 @@ async def recommend_autoplay_tracks_async(
         candidate_map[bt_b] = (max(80_000, prev_score + score_b + bonus), cand_b)
 
     if len(candidate_map) < limit * 2:
-        related_search = await _search_youtube_with_views_async(
+        related_search = _search_youtube_with_views(
             f"{clean_b_artist} {clean_b_title} official audio",
             limit=12,
             default_source_type="spotify_matched",
@@ -1368,7 +1369,6 @@ async def recommend_autoplay_tracks_async(
         art_picked = normalize_artist_only(picked_cand.artist)
         if bt_picked in seen_base_titles:
             continue
-        # Batasi maksimal 1 lagu dari artis yang sama dalam 1 batch kandidat Autoplay jika ada artis lain
         if norm_b_artist and art_picked == norm_b_artist:
             if (recent_artist_streak >= 2 or same_artist_picked >= 1) and len(top_pool) >= 2:
                 continue
@@ -1378,6 +1378,25 @@ async def recommend_autoplay_tracks_async(
         results.append(picked_cand)
 
     return results
+
+
+async def recommend_autoplay_tracks_async(
+    seed_title: str,
+    seed_artist: str,
+    exclude_keys: Optional[Any] = None,
+    limit: int = 5,
+    guild_id: str = "",
+    previous_tracks: Optional[List[Tuple[str, str]]] = None,
+) -> List[TrackCandidate]:
+    return await asyncio.to_thread(
+        recommend_autoplay_tracks,
+        seed_title,
+        seed_artist,
+        exclude_keys,
+        limit,
+        guild_id,
+        previous_tracks,
+    )
 
 
 def search_songs_with_singer(query: str, limit: int = 25) -> List[TrackCandidate]:
@@ -1753,6 +1772,15 @@ def _to_safe_ytdlp_target(query_or_url: str, studio_master_mode: bool = False) -
             slug = _clean_search_slug(f"{cand.title} {cand.artist}")
         except Exception:
             slug = "Mahalini Sial"
+    elif cleaned.startswith(("http://", "https://")):
+        parsed = urllib.parse.urlparse(cleaned)
+        path_words = [
+            w
+            for w in re.split(r"[/\-_?=&]+", urllib.parse.unquote(parsed.path or ""))
+            if w and not w.isdigit() and w.lower() not in ("us", "id", "album", "song", "track", "music", "playlist")
+        ]
+        slug = " ".join(path_words).strip() or "Hindia Evaluasi"
+        return f"ytsearch1:{slug} official audio"
 
     verified_hits = search_youtube_http(slug, limit=3, default_source_type="spotify_matched")
     if verified_hits:
@@ -1987,6 +2015,74 @@ def extract_playable_stream_ytdlp(query_or_url: str) -> Optional[Dict[str, objec
         pass
 
     return None
+
+
+_PREVIEW_STREAM_CACHE = LRUCache(max_size=400, ttl_seconds=1800)
+
+
+def resolve_browser_preview_stream(title: str, artist: str, source_url: str = "") -> Dict[str, Any]:
+    """
+    Menyediakan stream audio nyata untuk Web Browser Player (<audio>):
+    1. Jika source_url adalah radio langsung (.mp3/.m4a/stream), kembalikan langsung.
+    2. Cari stream audio M4A / AAC berkualitas tinggi untuk pemutaran langsung di browser,
+       atau gunakan hasil ekstraksi yt-dlp bila tersedia.
+    """
+    clean_t = (title or "").strip()
+    clean_a = (artist or "").strip()
+    cache_key = f"{clean_t.lower()}::{clean_a.lower()}::{source_url}"
+    cached = _PREVIEW_STREAM_CACHE.get(cache_key)
+    if cached:
+        return dict(cached)
+
+    # 1. Coba ambil stream preview M4A 256kbps dari katalog publik untuk pemutaran instan tanpa blokir CORS
+    query_str = f"{clean_t} {clean_a}".strip()
+    if query_str:
+        try:
+            itunes_url = (
+                "https://itunes.apple.com/search?"
+                + urllib.parse.urlencode(
+                    {
+                        "term": query_str,
+                        "media": "music",
+                        "entity": "song",
+                        "country": "ID",
+                        "limit": "5",
+                    }
+                )
+            )
+            raw_json = _http_get_text(itunes_url, timeout=4.5)
+            payload = json.loads(raw_json)
+            results = payload.get("results") or []
+            for item in results:
+                preview_url = str(item.get("previewUrl") or "").strip()
+                if preview_url:
+                    artwork = str(item.get("artworkUrl100") or "").replace("100x100bb", "600x600bb")
+                    out = {
+                        "stream_url": preview_url,
+                        "thumbnail_url": artwork,
+                        "source": "web_audio_stream",
+                    }
+                    _PREVIEW_STREAM_CACHE.set(cache_key, out)
+                    return dict(out)
+        except Exception:
+            pass
+
+    # 2. Coba yt-dlp jika terpasang di host
+    try:
+        target_q = source_url if (source_url and YOUTUBE_URL_RE.match(source_url)) else f"{clean_a} {clean_t}"
+        yt_res = extract_playable_stream_ytdlp(target_q)
+        if yt_res and yt_res.get("stream_url"):
+            out = {
+                "stream_url": str(yt_res["stream_url"]),
+                "thumbnail_url": str(yt_res.get("thumbnail_url") or ""),
+                "source": "ytdlp_stream",
+            }
+            _PREVIEW_STREAM_CACHE.set(cache_key, out)
+            return dict(out)
+    except Exception:
+        pass
+
+    return {"stream_url": "", "thumbnail_url": "", "source": "synth_fallback"}
 
 
 ensure_music_history_table()

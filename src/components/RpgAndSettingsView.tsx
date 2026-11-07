@@ -59,6 +59,8 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
   const [remDays, setRemDays] = useState(guildSettings?.reminder_days_before || 3);
   const [tz, setTz] = useState(guildSettings?.timezone || 'Asia/Jakarta');
   const [expCooldown, setExpCooldown] = useState(guildSettings?.exp_cooldown_seconds || 60);
+  const [settingAutoplay, setSettingAutoplay] = useState(Boolean(guildSettings?.autoplay ?? 1));
+  const [settingMode247, setSettingMode247] = useState(Boolean(guildSettings?.mode_247 ?? 1));
 
   const [metrics, setMetrics] = useState<Record<string, unknown> | null>(null);
   const [testResult, setTestResult] = useState<Record<string, unknown> | null>(null);
@@ -79,13 +81,18 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
       setRemDays(guildSettings.reminder_days_before);
       setTz(guildSettings.timezone);
       setExpCooldown(guildSettings.exp_cooldown_seconds);
+      setSettingAutoplay(Boolean(guildSettings.autoplay));
+      setSettingMode247(Boolean(guildSettings.mode_247));
     }
   }, [guildSettings]);
 
   const loadAdminMetrics = async () => {
     if (!isOwner) return;
-    const resp = await fetch(`/api/admin/metrics?is_owner=${isOwner ? 'true' : 'false'}`, {
-      headers: { Authorization: `Bearer ${sessionToken}` },
+    const resp = await fetch(`/api/admin/metrics?role=admin`, {
+      headers: {
+        Authorization: `Bearer ${sessionToken}`,
+        'X-Actor-Role': 'admin',
+      },
     });
     if (resp.ok) {
       setMetrics(await resp.json());
@@ -94,8 +101,11 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
 
   const loadPythonFile = async (filePath: string) => {
     if (!isOwner) return;
-    const resp = await fetch(`/api/python-codebase?file=${encodeURIComponent(filePath)}`, {
-      headers: { Authorization: `Bearer ${sessionToken}` },
+    const resp = await fetch(`/api/python-codebase?file=${encodeURIComponent(filePath)}&role=admin`, {
+      headers: {
+        Authorization: `Bearer ${sessionToken}`,
+        'X-Actor-Role': 'admin',
+      },
     });
     if (resp.ok) {
       const data = await resp.json();
@@ -266,7 +276,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
               <div className="bg-[#181818] border border-white/5 rounded-xl p-5 space-y-3.5">
                 <div className="space-y-1.5">
                   <span className="inline-block px-2 py-0.5 rounded-full bg-[#DC95FF]/15 text-[#DC95FF] text-[10px] font-bold">
-                    KHUSUS BOT OWNER
+                    KHUSUS ADMIN SERVER
                   </span>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
                     <Shield className="w-4 h-4 text-[#DC95FF] shrink-0" />
@@ -274,7 +284,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                   </h3>
                 </div>
                 <p className="text-xs text-[#B3B3B3]">
-                  Panel pengujian EXP ini dikunci khusus <strong className="text-white">Bot Owner</strong> agar anggota biasa tidak dapat melakukan spam/dupe EXP dari web panel.
+                  Panel pengujian EXP ini dikunci khusus <strong className="text-white">Admin Server</strong> agar anggota biasa tidak dapat melakukan spam/dupe EXP dari web panel.
                 </p>
 
                 <div>
@@ -323,6 +333,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                         credentials: 'include',
                         headers: {
                           'Content-Type': 'application/json',
+                          'X-Actor-Role': 'admin',
                           ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
                         },
                         body: JSON.stringify({
@@ -330,6 +341,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                           message_content:
                             simMessage.trim() || 'Mengerjakan latihan soal Algoritma & Struktur Data',
                           bypass_cooldown: false,
+                          is_admin: true,
                         }),
                       });
                       const data = await resp.json();
@@ -344,7 +356,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                       );
                       onRefreshRpg();
                     }}
-                    className="w-full py-2.5 px-3 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs"
+                    className="w-full py-2.5 px-3 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs cursor-pointer"
                   >
                     Uji Aktivitas (Patuhi Cooldown Anti-Spam)
                   </button>
@@ -356,6 +368,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                         credentials: 'include',
                         headers: {
                           'Content-Type': 'application/json',
+                          'X-Actor-Role': 'admin',
                           ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
                         },
                         body: JSON.stringify({
@@ -363,21 +376,22 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                           message_content:
                             simMessage.trim() || 'Mengerjakan latihan soal Algoritma & Struktur Data',
                           bypass_cooldown: true,
+                          is_admin: true,
                         }),
                       });
                       const data = await resp.json();
                       if (resp.ok) {
                         onNotify(
-                          `Simulasi Owner berhasil (Level ${data.level}: ${data.current_exp}/${data.max_exp} EXP).`
+                          `Simulasi Admin Server berhasil (Level ${data.level}: ${data.current_exp}/${data.max_exp} EXP).`
                         );
                         onRefreshRpg();
                       } else {
                         onNotify(data.error || 'Akses ditolak.', true);
                       }
                     }}
-                    className="w-full py-2 px-3 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-white font-semibold text-xs"
+                    className="w-full py-2 px-3 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-white font-semibold text-xs cursor-pointer"
                   >
-                    Tambah EXP Instan (Bypass Cooldown — Owner)
+                    Tambah EXP Instan (Bypass Cooldown — Admin Server)
                   </button>
                 </div>
               </div>
@@ -398,7 +412,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                   <li>Bermain minigames (<code className="font-mono text-[#DC95FF]">/kuis</code>, <code className="font-mono text-[#DC95FF]">/mathbattle</code>, <code className="font-mono text-[#DC95FF]">/suit</code>)</li>
                 </ul>
                 <p className="text-[11px] text-[#B3B3B3] pt-1 border-t border-white/5">
-                  Fitur simulasi EXP manual pada dashboard dikunci khusus untuk Bot Owner.
+                  Fitur simulasi EXP manual pada dashboard dikhususkan untuk Admin Server.
                 </p>
               </div>
             )}
@@ -508,7 +522,10 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
             e.preventDefault();
             const resp = await fetch(`/api/guilds/${guildId}/settings`, {
               method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Actor-Role': isOwner ? 'admin' : 'member',
+              },
               body: JSON.stringify({
                 music_channel_id: musicCh,
                 task_channel_id: taskCh,
@@ -517,11 +534,17 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                 reminder_days_before: Number(remDays),
                 timezone: tz,
                 exp_cooldown_seconds: Number(expCooldown),
+                autoplay: settingAutoplay,
+                mode_247: settingMode247,
+                is_admin: true,
               }),
             });
             if (resp.ok) {
-              onNotify('Pengaturan server berhasil disimpan.');
+              onNotify('Pengaturan server (termasuk Autoplay & Mode 24/7) berhasil disimpan.');
               onRefreshSettings();
+            } else {
+              const err = await resp.json().catch(() => ({}));
+              onNotify(err.error || 'Gagal menyimpan pengaturan server.', true);
             }
           }}
           className="grid grid-cols-1 sm:grid-cols-2 gap-4"
@@ -597,6 +620,56 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
             />
           </div>
 
+          <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            <button
+              type="button"
+              onClick={() => setSettingAutoplay((prev) => !prev)}
+              className={`p-3 rounded-xl border text-left transition-colors cursor-pointer flex items-center justify-between ${
+                settingAutoplay
+                  ? 'bg-[#DC95FF]/15 border-[#DC95FF]/50 text-white'
+                  : 'bg-[#242424] border-white/10 text-[#B3B3B3]'
+              }`}
+            >
+              <div>
+                <div className="text-xs font-bold text-white">Autoplay Otomatis Server</div>
+                <div className="text-[11px] text-[#B3B3B3]">
+                  Putar lagu rekomendasi otomatis saat antrean habis
+                </div>
+              </div>
+              <span
+                className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                  settingAutoplay ? 'bg-[#DC95FF] text-black' : 'bg-[#181818] text-[#B3B3B3]'
+                }`}
+              >
+                {settingAutoplay ? 'ON' : 'OFF'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSettingMode247((prev) => !prev)}
+              className={`p-3 rounded-xl border text-left transition-colors cursor-pointer flex items-center justify-between ${
+                settingMode247
+                  ? 'bg-[#DC95FF]/15 border-[#DC95FF]/50 text-white'
+                  : 'bg-[#242424] border-white/10 text-[#B3B3B3]'
+              }`}
+            >
+              <div>
+                <div className="text-xs font-bold text-white">Mode 24/7 Voice Standby</div>
+                <div className="text-[11px] text-[#B3B3B3]">
+                  Pertahankan bot tetap berada di Voice Channel 24/7
+                </div>
+              </div>
+              <span
+                className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                  settingMode247 ? 'bg-[#DC95FF] text-black' : 'bg-[#181818] text-[#B3B3B3]'
+                }`}
+              >
+                {settingMode247 ? 'ON' : 'OFF'}
+              </span>
+            </button>
+          </div>
+
           <div className="sm:col-span-2">
             <label className="block text-xs text-[#B3B3B3] mb-1">
               Tautan Kalender Waskita (.ics) — Dapat Diatur via <code className="font-mono">MOODLE_ICAL_URL</code> di <code className="font-mono">.env</code>
@@ -613,7 +686,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
           <div className="sm:col-span-2 pt-2">
             <button
               type="submit"
-              className="px-6 py-2.5 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs"
+              className="px-6 py-2.5 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs cursor-pointer"
             >
               Simpan Pengaturan Server
             </button>
@@ -632,7 +705,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
                 <Shield className="w-4 h-4 text-[#DC95FF]" />
-                Super-Admin Hub (Khusus OWNER_DISCORD_ID)
+                Admin Server Hub (Khusus Administrator Server)
               </h2>
               <p className="text-xs text-[#B3B3B3] mt-0.5">
                 Metrik diukur langsung dari proses aplikasi saat ini beserta fitur cadangan data terenkripsi.
@@ -650,8 +723,9 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                       headers: {
                         'Content-Type': 'application/json',
                         Authorization: `Bearer ${sessionToken}`,
+                        'X-Actor-Role': 'admin',
                       },
-                      body: JSON.stringify({ is_owner: true }),
+                      body: JSON.stringify({ is_admin: true }),
                     });
                     const data = await resp.json();
                     if (resp.ok) {
@@ -664,7 +738,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                     setAdminBusy(false);
                   }
                 }}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs cursor-pointer"
               >
                 <Database className="w-3.5 h-3.5" />
                 Buat Cadangan Data Sekarang
@@ -681,8 +755,9 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                       headers: {
                         'Content-Type': 'application/json',
                         Authorization: `Bearer ${sessionToken}`,
+                        'X-Actor-Role': 'admin',
                       },
-                      body: JSON.stringify({ is_owner: true, perform_update: false }),
+                      body: JSON.stringify({ is_admin: true, perform_update: false }),
                     });
                     const data = await resp.json();
                     setYtdlpStatus(data);
@@ -691,7 +766,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                     setAdminBusy(false);
                   }
                 }}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-white font-semibold text-xs"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-white font-semibold text-xs cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 Cek Worker yt-dlp
@@ -705,7 +780,10 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                   try {
                     const resp = await fetch('/api/admin/run-tests', {
                       method: 'POST',
-                      headers: { Authorization: `Bearer ${sessionToken}` },
+                      headers: {
+                        Authorization: `Bearer ${sessionToken}`,
+                        'X-Actor-Role': 'admin',
+                      },
                     });
                     const data = await resp.json();
                     setTestResult(data);
@@ -714,7 +792,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                     setAdminBusy(false);
                   }
                 }}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-white font-semibold text-xs"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-white font-semibold text-xs cursor-pointer"
               >
                 <Terminal className="w-3.5 h-3.5 text-[#DC95FF]" />
                 Jalankan Automated Tests Python
@@ -800,10 +878,10 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
     return (
       <div className="bg-[#181818] border border-rose-800/40 rounded-xl p-8 text-center space-y-2">
         <Shield className="w-8 h-8 text-rose-400 mx-auto" />
-        <h2 className="text-base font-bold text-white">Akses Ditolak — Khusus Bot Owner</h2>
+        <h2 className="text-base font-bold text-white">Akses Ditolak — Khusus Admin Server</h2>
         <p className="text-xs text-[#B3B3B3] max-w-md mx-auto">
           Kode sumber Bot Python (<code className="font-mono">/athenaa</code>), unduhan paket{' '}
-          <code className="font-mono">.zip</code>, dan Super-Admin Hub hanya dapat diakses oleh sesi login Bot Owner.
+          <code className="font-mono">.zip</code>, dan Admin Server Hub hanya dapat diakses oleh role Admin Server.
         </p>
       </div>
     );
@@ -823,7 +901,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
         </div>
 
         <a
-          href={`/api/python-codebase/download-zip?session_token=${encodeURIComponent(sessionToken)}`}
+          href={`/api/python-codebase/download-zip?session_token=${encodeURIComponent(sessionToken)}&role=admin`}
           download="athenaa-discord-bot.zip"
           className="px-4 py-2 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs flex items-center justify-center gap-2 shrink-0 whitespace-nowrap"
         >

@@ -103,7 +103,10 @@ let _initPromise: Promise<void> | null = null;
  */
 export async function initSharedLogic(wasmUrl?: string): Promise<SharedLogicModule> {
   if (_module) return _module;
-  if (_initPromise) return _initPromise;
+  if (_initPromise) {
+    await _initPromise;
+    return _module!;
+  }
 
   _initPromise = (async () => {
     // Dynamic import of wasm-bindgen generated module
@@ -246,17 +249,3 @@ export async function isSameBaseSong(title1: string, title2: string): Promise<bo
   const mod = await initSharedLogic();
   return mod.is_same_base_song(title1, title2);
 }
-
-// Re-export types
-export type {
-  SyncedLyricLine,
-  HostLockContext,
-  ParsedIcsEvent,
-  ExpResult,
-  HostLockResult,
-  ReminderStageResult,
-  ValidationResult,
-  SingleSessionResult,
-  OwnerAccessResult,
-  SharedLogicModule,
-};

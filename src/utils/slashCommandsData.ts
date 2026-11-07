@@ -37,4 +37,6 @@ export const SLASH_COMMANDS_LIST: SlashCommandInfo[] = [
   { name: '/suit', params: 'pilihan (batu|gunting|kertas)', category: 'Minigames', description: 'Mainkan suit Batu-Gunting-Kertas melawan Athenaa (+15 EXP)' },
   { name: '/8ball', params: 'pertanyaan', category: 'Minigames', description: 'Tanyakan pertanyaan ke Kerang Ajaib Athenaa' },
   { name: '/dadu', params: '[sisi]', category: 'Minigames', description: 'Lempar dadu keberuntungan (d6, d20, d100)' },
+  { name: '/admin', params: '', category: 'Leaderboard & AFK', description: 'Tampilkan status konfigurasi server, metrik kontainer, dan hak akses Admin Server, DJ, & Member' },
 ];
+

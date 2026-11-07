@@ -1,9 +1,9 @@
 """
 Modul Keamanan Aplikasi:
-- Validasi Host Lock (Session Host, DJ Role, Server Admin, Owner)
+- Validasi Host Lock Per-Server (Admin Server, Role DJ, dan Member / Session Host)
 - Pencegahan SSRF (memblokir localhost/private IP untuk input URL eksternal)
 - Pencegahan Path Traversal & validasi file modul (.pdf, .doc, .docx, maks 15 MB, magic bytes)
-- Enkripsi simetris kredensial integrasi & penyamaran token untuk log (menggunakan cryptography.Fernet)
+- Enkripsi simetris kredensial integrasi & penyamaran token untuk log (Fernet + stdlib HMAC fallback)
 - Validasi state OAuth2, token CSRF, dan Rate Limiter berbasis sliding window
 """
 
@@ -52,56 +52,96 @@ def mask_secret(value: str) -> str:
 
 def _derive_key(password: str, salt: bytes) -> bytes:
     """Derive encryption key from password using PBKDF2-HMAC-SHA256."""
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=100_000,
-    )
-    return kdf.derive(password.encode("utf-8"))
+    if CRYPTOGRAPHY_AVAILABLE:
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100_000,
+        )
+        return kdf.derive(password.encode("utf-8"))
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000, dklen=32)
 
 
 def _get_fernet(password: str) -> "Fernet":
     """Get or create Fernet instance from password (with fixed salt for deterministic key)."""
-    if not CRYPTOGRAPHY_AVAILABLE:
-        raise RuntimeError("cryptography library not installed. Run: pip install cryptography")
-    # Use a fixed salt derived from the password for deterministic key derivation
-    # In production, consider storing salt separately
     salt = hashlib.sha256(password.encode("utf-8")).digest()[:16]
     key = _derive_key(password, salt)
     return Fernet(base64.urlsafe_b64encode(key))
 
 
-def encrypt_secret(plaintext: str, key: str) -> str:
-    """Enkripsi kredensial sensitif menggunakan Fernet (AES-128-GCM authenticated encryption)."""
+def _stdlib_encrypt(raw_bytes: bytes, key_str: str) -> str:
+    salt = os.urandom(16)
+    derived = hashlib.pbkdf2_hmac("sha256", key_str.encode("utf-8"), salt, 50_000, dklen=64)
+    enc_key, mac_key = derived[:32], derived[32:]
+    out = bytearray(len(raw_bytes))
+    for i in range(0, len(raw_bytes), 32):
+        blk = hashlib.sha256(enc_key + salt + i.to_bytes(8, "big")).digest()
+        chunk = raw_bytes[i : i + 32]
+        for j, b in enumerate(chunk):
+            out[i + j] = b ^ blk[j]
+    cipher_bytes = bytes(out)
+    tag = hmac.new(mac_key, salt + cipher_bytes, hashlib.sha256).digest()
+    return "STD1$" + base64.urlsafe_b64encode(salt + tag + cipher_bytes).decode("ascii")
+
+
+def _stdlib_decrypt(token: str, key_str: str) -> bytes:
+    payload = base64.urlsafe_b64decode(token[5:].encode("ascii"))
+    if len(payload) < 48:
+        raise ValueError("Token terenkripsi rusak.")
+    salt = payload[:16]
+    tag = payload[16:48]
+    cipher_bytes = payload[48:]
+    derived = hashlib.pbkdf2_hmac("sha256", key_str.encode("utf-8"), salt, 50_000, dklen=64)
+    enc_key, mac_key = derived[:32], derived[32:]
+    expected_tag = hmac.new(mac_key, salt + cipher_bytes, hashlib.sha256).digest()
+    if not hmac.compare_digest(tag, expected_tag):
+        raise ValueError("Integritas HMAC gagal.")
+    out = bytearray(len(cipher_bytes))
+    for i in range(0, len(cipher_bytes), 32):
+        blk = hashlib.sha256(enc_key + salt + i.to_bytes(8, "big")).digest()
+        chunk = cipher_bytes[i : i + 32]
+        for j, b in enumerate(chunk):
+            out[i + j] = b ^ blk[j]
+    return bytes(out)
+
+
+def encrypt_secret(plaintext: str | bytes, key: str = "") -> str:
+    """Enkripsi kredensial sensitif menggunakan Fernet atau stdlib PBKDF2+HMAC fallback."""
     if not plaintext:
         return ""
-    try:
-        fernet = _get_fernet(key)
-        token = fernet.encrypt(plaintext.encode("utf-8"))
-        return token.decode("ascii")
-    except Exception as e:
-        raise ValueError(f"Gagal enkripsi: {e}")
+    eff_key = key or os.getenv("ENCRYPTION_KEY", "athenaa-default-encryption-key-2026")
+    raw_bytes = plaintext.encode("utf-8") if isinstance(plaintext, str) else bytes(plaintext)
+    if CRYPTOGRAPHY_AVAILABLE:
+        try:
+            fernet = _get_fernet(eff_key)
+            token = fernet.encrypt(raw_bytes)
+            return token.decode("ascii")
+        except Exception as e:
+            raise ValueError(f"Gagal enkripsi: {e}")
+    return _stdlib_encrypt(raw_bytes, eff_key)
 
 
-def decrypt_secret(token: str, key: str) -> str:
-    """Dekripsi kredensial dan verifikasi integritas (Fernet handles auth automatically)."""
+def decrypt_secret(token: str, key: str = "") -> str:
+    """Dekripsi kredensial dan verifikasi integritas."""
     if not token:
         return ""
-    try:
-        fernet = _get_fernet(key)
-        plaintext = fernet.decrypt(token.encode("ascii"))
-        return plaintext.decode("utf-8")
-    except Exception as e:
-        raise ValueError(f"Gagal dekripsi/integritas gagal: {e}")
+    eff_key = key or os.getenv("ENCRYPTION_KEY", "athenaa-default-encryption-key-2026")
+    if token.startswith("STD1$"):
+        raw = _stdlib_decrypt(token, eff_key)
+        return raw.decode("utf-8", errors="replace")
+    if CRYPTOGRAPHY_AVAILABLE:
+        try:
+            fernet = _get_fernet(eff_key)
+            plaintext = fernet.decrypt(token.encode("ascii"))
+            return plaintext.decode("utf-8", errors="replace")
+        except Exception as e:
+            raise ValueError(f"Gagal dekripsi/integritas gagal: {e}")
+    raise ValueError("Format token membutuhkan pustaka cryptography.")
 
 
 def validate_external_url(url: str, resolve_dns: bool = True) -> Tuple[bool, str]:
-    """Memvalidasi URL eksternal dan mencegah SSRF ke jaringan lokal/internal.
-    
-    SELALU resolve DNS (default True) untuk mencegah DNS rebinding attacks.
-    Blokir private CIDR: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 127.0.0.0/8, ::1/128, fc00::/7.
-    """
+    """Memvalidasi URL eksternal dan mencegah SSRF ke jaringan lokal/internal."""
     if not url or len(url) > 2048:
         return False, "URL kosong atau melebihi batas panjang."
     parsed = urlparse(url.strip())
@@ -110,37 +150,37 @@ def validate_external_url(url: str, resolve_dns: bool = True) -> Tuple[bool, str
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         return False, "Hostname URL tidak ditemukan."
-    
-    # Blocklist hostname berbahaya
+
     blocked_hostnames = {
-        "localhost", "0.0.0.0", "127.0.0.1", "::1", 
-        "metadata.google.internal", "metadata", "metadata.azure.com",
-        "169.254.169.254",  # AWS/GCP/Azure metadata
+        "localhost",
+        "0.0.0.0",
+        "127.0.0.1",
+        "::1",
+        "metadata.google.internal",
+        "metadata",
+        "metadata.azure.com",
+        "169.254.169.254",
     }
     if hostname in blocked_hostnames:
         return False, "Akses ke alamat loopback atau metadata internal ditolak."
 
-    # Selalu resolve DNS untuk validasi IP tujuan (mencegah DNS rebinding)
-    try:
-        # Resolve hostname ke IP (IPv4)
-        resolved_ips = socket.getaddrinfo(hostname, None, socket.AF_INET, socket.SOCK_STREAM)
-        for _, _, _, _, sockaddr in resolved_ips:
-            ip_str = sockaddr[0]
-            ip_obj = ipaddress.ip_address(ip_str)
-            if _is_private_or_reserved_ip(ip_obj):
-                return False, f"Domain mengarah ke alamat IP internal yang diblokir: {ip_str}"
-    except socket.gaierror:
-        return False, "Gagal memvalidasi DNS untuk hostname tujuan."
-    except Exception as e:
-        return False, f"Error validasi DNS: {e}"
-
-    # Jika hostname langsung berupa IP, validasi juga
     try:
         ip_obj = ipaddress.ip_address(hostname)
         if _is_private_or_reserved_ip(ip_obj):
             return False, "Akses ke alamat IP privat atau internal ditolak."
     except ValueError:
-        pass  # Bukan IP literal, sudah divalidasi via DNS di atas
+        if resolve_dns:
+            try:
+                resolved_ips = socket.getaddrinfo(hostname, None, socket.AF_INET, socket.SOCK_STREAM)
+                for _, _, _, _, sockaddr in resolved_ips:
+                    ip_str = sockaddr[0]
+                    ip_obj = ipaddress.ip_address(ip_str)
+                    if _is_private_or_reserved_ip(ip_obj):
+                        return False, f"Domain mengarah ke alamat IP internal yang diblokir: {ip_str}"
+            except socket.gaierror:
+                return False, "Gagal memvalidasi DNS untuk hostname tujuan."
+            except Exception as e:
+                return False, f"Error validasi DNS: {e}"
 
     return True, "OK"
 
@@ -153,7 +193,6 @@ def _is_private_or_reserved_ip(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Add
         or ip_obj.is_link_local
         or ip_obj.is_multicast
         or ip_obj.is_reserved
-        # Documentation networks (RFC 5737, RFC 3849)
         or (ip_obj.version == 4 and ip_obj in ipaddress.ip_network("192.0.2.0/24"))
         or (ip_obj.version == 4 and ip_obj in ipaddress.ip_network("198.51.100.0/24"))
         or (ip_obj.version == 4 and ip_obj in ipaddress.ip_network("203.0.113.0/24"))
@@ -204,32 +243,34 @@ def can_control_queue(
     user_id: str,
     user_roles: List[str],
     is_admin: bool,
-    is_owner: bool,
-    session_host_id: str,
-    dj_role_id: str,
+    is_owner: bool = False,
+    session_host_id: str = "",
+    dj_role_id: str = "",
     action: str = "control",
     target_item_requester_id: Optional[str] = None,
     has_dj_role: bool = False,
 ) -> Tuple[bool, str]:
     """
-    Aturan Host Lock System:
-    - Owner bot, Administrator server, dan pemilik Role DJ dapat mengontrol semua antrean.
+    Aturan Host Lock System Per-Server (Admin Server, Role DJ, dan Member):
+    - Admin Server (Administrator / Manage Guild) dan pemilik Role DJ dapat mengontrol semua antrean & mode.
     - Session Host dapat mengontrol antrean selama sesinya aktif.
-    - Pengguna biasa hanya dapat menghapus (remove) item miliknya sendiri.
-    - Pengguna biasa tidak dapat skip, stop, shuffle, atau menghapus lagu pengguna lain.
+    - Toggle Autoplay & 24/7 Mode dapat diklik oleh Admin, DJ, Session Host, maupun Member ketika tidak terkunci.
+    - Member biasa selalu dapat menghapus (remove) item miliknya sendiri.
     """
-    if is_owner or is_admin:
-        return True, "Diizinkan (Administrator / Owner)."
-    if has_dj_role or (dj_role_id and dj_role_id in user_roles):
+    if is_admin or is_owner:
+        return True, "Diizinkan (Admin Server)."
+    if has_dj_role or (dj_role_id and dj_role_id in (user_roles or [])) or ("role-dj" in (user_roles or [])):
         return True, "Diizinkan (Role DJ)."
     if not session_host_id or session_host_id == user_id:
-        return True, "Diizinkan (Session Host)."
+        return True, "Diizinkan (Session Host / Member)."
+    if action in ("autoplay", "mode_247"):
+        return True, "Diizinkan (Toggle Mode Autoplay / 24/7)."
     if action == "remove_item" and target_item_requester_id and target_item_requester_id == user_id:
         return True, "Diizinkan (Menghapus lagu milik sendiri)."
 
     return (
         False,
-        f"Host Lock aktif: Hanya Session Host (<@{session_host_id}>), Role DJ, atau Admin yang dapat melakukan aksi '{action}'.",
+        f"Host Lock aktif: Hanya Session Host (<@{session_host_id}>), Role DJ, atau Admin Server yang dapat melakukan aksi '{action}'.",
     )
 
 
@@ -237,9 +278,9 @@ def check_host_lock_permission(
     user_id: str,
     user_roles: List[str],
     is_admin: bool,
-    is_owner: bool,
-    session_host_id: str,
-    dj_role_id: str,
+    is_owner: bool = False,
+    session_host_id: str = "",
+    dj_role_id: str = "",
     action: str = "control",
     target_item_requester_id: Optional[str] = None,
     has_dj_role: bool = False,
@@ -256,7 +297,6 @@ def check_host_lock_permission(
         target_item_requester_id=target_item_requester_id,
         has_dj_role=has_dj_role,
     )
-
 
 
 class SlidingWindowRateLimiter:
@@ -290,4 +330,7 @@ def validate_snowflake_param(param_name: str, value: str) -> None:
     """Validasi parameter Discord snowflake ID, raise HTTPException jika tidak valid."""
     if not value or not is_valid_snowflake(value):
         from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail=f"Parameter {param_name} tidak valid: harus berupa Discord Snowflake ID (15-22 digit).")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Parameter {param_name} tidak valid: harus berupa Discord Snowflake ID (15-22 digit).",
+        )

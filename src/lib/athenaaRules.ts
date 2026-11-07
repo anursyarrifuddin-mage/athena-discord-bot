@@ -58,17 +58,24 @@ export function applyExpGain(
 }
 
 /**
- * Host Lock System validation rules:
- * - Bot Owner, Server Administrator, and DJ Role can control all queue actions.
+ * Host Lock System validation rules (Per-Server: Admin, DJ, Member):
+ * - Server Administrator and DJ Role can control all queue actions.
  * - Active Session Host can control queue during their session.
- * - Regular members can only remove items they requested themselves.
+ * - Toggling autoplay or mode_247 is allowed for active session participants.
+ * - Regular members can remove items they requested themselves.
  */
 export function canControlQueue(ctx: HostLockContext): { allowed: boolean; reason: string } {
-  if (ctx.isOwner || ctx.isAdmin) {
-    return { allowed: true, reason: 'Diizinkan (Administrator / Owner).' };
+  if (ctx.isAdmin || ctx.isOwner) {
+    return { allowed: true, reason: 'Diizinkan (Admin Server).' };
   }
   if (ctx.djRoleId && ctx.userRoles.includes(ctx.djRoleId)) {
     return { allowed: true, reason: 'Diizinkan (Role DJ).' };
+  }
+  if (ctx.userRoles.includes('role-dj') || ctx.userRoles.includes('dj') || ctx.userRoles.includes('admin')) {
+    return { allowed: true, reason: 'Diizinkan (Role DJ / Admin).' };
+  }
+  if (ctx.action === 'autoplay' || ctx.action === 'mode_247' || ctx.action === 'loop') {
+    return { allowed: true, reason: 'Diizinkan (Kontrol Mode Pemutaran).' };
   }
   if (!ctx.sessionHostId || ctx.sessionHostId === ctx.userId) {
     return { allowed: true, reason: 'Diizinkan (Session Host).' };
@@ -83,7 +90,7 @@ export function canControlQueue(ctx: HostLockContext): { allowed: boolean; reaso
 
   return {
     allowed: false,
-    reason: `Host Lock aktif: Hanya Session Host, pemilik Role DJ, atau Administrator yang dapat menjalankan aksi "${ctx.action}".`,
+    reason: `Host Lock aktif: Hanya Session Host, pemilik Role DJ, atau Admin Server yang dapat menjalankan aksi "${ctx.action}".`,
   };
 }
 
@@ -348,10 +355,11 @@ export function validateAttachmentMeta(
 
 /**
  * Verifies whether the current Discord user session is authorized to view or download
- * the Python Bot source code (.zip) and Super-Admin Hub. Strictly Owner-only.
+ * the Python Bot source code (.zip) and Admin Server Hub. Restricted to Server Admin.
  */
-export function canAccessOwnerResources(ctx: {
-  isOwner: boolean;
+export function canAccessAdminResources(ctx: {
+  isAdmin?: boolean;
+  isOwner?: boolean;
   sessionToken?: string | null;
 }): { allowed: boolean; reason: string } {
   if (!ctx.sessionToken || !ctx.sessionToken.trim()) {
@@ -360,14 +368,17 @@ export function canAccessOwnerResources(ctx: {
       reason: 'Sesi login Discord tidak valid. Silakan login terlebih dahulu.',
     };
   }
-  if (!ctx.isOwner) {
+  if (!ctx.isAdmin && !ctx.isOwner) {
     return {
       allowed: false,
-      reason: 'Akses Ditolak: Kode Bot Python dan unduhan .zip khusus untuk Bot Owner.',
+      reason: 'Akses Ditolak: Kode Bot Python dan Admin Hub khusus untuk Admin Server.',
     };
   }
-  return { allowed: true, reason: 'Diizinkan (Bot Owner).' };
+  return { allowed: true, reason: 'Diizinkan (Admin Server).' };
 }
+
+export const canAccessOwnerResources = canAccessAdminResources;
+
 
 /**
  * Enforces 1 active session per Discord user ID.

@@ -136,24 +136,44 @@ const SpotifyBottomPlayerComponent: React.FC<SpotifyBottomPlayerProps> = ({
         </div>
 
         {/* Mobile Quick Transport Controls (visible on < md) */}
-        <div className="flex md:hidden items-center gap-2 shrink-0">
+        <div className="flex md:hidden items-center gap-1.5 shrink-0">
           <button
             type="button"
-            aria-label="Acak antrean"
-            onClick={() => onControl('shuffle')}
-            className="text-[#B3B3B3] hover:text-white p-1"
+            aria-label="Toggle Autoplay Mobile"
+            onClick={() => onControl('autoplay', !musicState.autoplay)}
+            className={`px-2 py-1 rounded-full text-[10px] font-bold transition-colors whitespace-nowrap ${
+              musicState.autoplay
+                ? 'bg-[#DC95FF]/20 text-[#DC95FF] border border-[#DC95FF]/50'
+                : 'bg-[#1F1F1F] text-[#B3B3B3]'
+            }`}
           >
-            <Shuffle className="w-4 h-4" />
+            AUTO {musicState.autoplay ? 'ON' : 'OFF'}
+          </button>
+
+          <button
+            type="button"
+            aria-label="Toggle Mode 24/7 Mobile"
+            onClick={() => onControl('mode_247', !musicState.mode_247)}
+            className={`px-2 py-1 rounded-full text-[10px] font-bold transition-colors whitespace-nowrap ${
+              musicState.mode_247
+                ? 'bg-[#DC95FF]/20 text-[#DC95FF] border border-[#DC95FF]/50'
+                : 'bg-[#1F1F1F] text-[#B3B3B3]'
+            }`}
+          >
+            24/7 {musicState.mode_247 ? 'ON' : 'OFF'}
           </button>
 
           <button
             type="button"
             aria-label={musicState.is_playing && !musicState.is_paused ? 'Jeda lagu' : 'Lanjutkan lagu'}
-            onClick={() =>
-              onControl(musicState.is_playing && !musicState.is_paused ? 'pause' : 'resume')
-            }
-            disabled={!track}
-            className="w-8 h-8 rounded-full bg-white disabled:opacity-40 text-black flex items-center justify-center shadow"
+            onClick={() => {
+              if (!track) {
+                onControl('autoplay', true);
+                return;
+              }
+              onControl(musicState.is_playing && !musicState.is_paused ? 'pause' : 'resume');
+            }}
+            className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center shadow"
           >
             {musicState.is_playing && !musicState.is_paused ? (
               <Pause className="w-4 h-4 fill-current" />
@@ -166,8 +186,7 @@ const SpotifyBottomPlayerComponent: React.FC<SpotifyBottomPlayerProps> = ({
             type="button"
             aria-label="Lewati lagu"
             onClick={() => onControl('skip')}
-            disabled={!track}
-            className="text-[#B3B3B3] hover:text-white disabled:opacity-40 p-1"
+            className="text-[#B3B3B3] hover:text-white p-1"
           >
             <SkipForward className="w-4 h-4 fill-current" />
           </button>
@@ -212,11 +231,14 @@ const SpotifyBottomPlayerComponent: React.FC<SpotifyBottomPlayerProps> = ({
           <button
             type="button"
             aria-label={musicState.is_playing && !musicState.is_paused ? 'Jeda lagu' : 'Lanjutkan lagu'}
-            onClick={() =>
-              onControl(musicState.is_playing && !musicState.is_paused ? 'pause' : 'resume')
-            }
-            disabled={!track}
-            className="w-9 h-9 rounded-full bg-white hover:scale-105 active:scale-95 disabled:opacity-40 text-black flex items-center justify-center transition-transform shadow"
+            onClick={() => {
+              if (!track) {
+                onControl('autoplay', true);
+                return;
+              }
+              onControl(musicState.is_playing && !musicState.is_paused ? 'pause' : 'resume');
+            }}
+            className="w-9 h-9 rounded-full bg-white hover:scale-105 active:scale-95 text-black flex items-center justify-center transition-transform shadow cursor-pointer"
           >
             {musicState.is_playing && !musicState.is_paused ? (
               <Pause className="w-4 h-4 fill-current" />

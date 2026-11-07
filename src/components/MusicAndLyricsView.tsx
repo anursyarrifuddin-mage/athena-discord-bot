@@ -388,9 +388,28 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
                             : 'YouTube Audio'}
                         </div>
                         <div>Diminta oleh: {currentTrack.requester_name}</div>
-                        <div>
-                          Mode: Loop {musicState.loop_mode.toUpperCase()} · Autoplay{' '}
-                          {musicState.autoplay ? 'ON' : 'OFF'}
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          <span className="px-2 py-0.5 rounded bg-[#282828] text-[11px] text-white">
+                            Loop: {musicState.loop_mode.toUpperCase()}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
+                              musicState.autoplay
+                                ? 'bg-[#DC95FF]/20 text-[#DC95FF]'
+                                : 'bg-[#282828] text-[#B3B3B3]'
+                            }`}
+                          >
+                            Autoplay: {musicState.autoplay ? 'ON' : 'OFF'}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
+                              musicState.mode_247
+                                ? 'bg-[#DC95FF]/20 text-[#DC95FF]'
+                                : 'bg-[#282828] text-[#B3B3B3]'
+                            }`}
+                          >
+                            24/7: {musicState.mode_247 ? 'ON' : 'OFF'}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -402,7 +421,7 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
                     </div>
                   )}
 
-                  <div className="flex flex-wrap items-center gap-2.5 pt-2">
+                  <div className="flex flex-wrap items-center gap-2 pt-2">
                     <button
                       type="button"
                       onClick={() =>
@@ -410,7 +429,7 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
                           musicState.is_playing && !musicState.is_paused ? 'pause' : 'resume'
                         )
                       }
-                      className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs transition-transform active:scale-95"
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs transition-transform active:scale-95 cursor-pointer"
                     >
                       {musicState.is_playing && !musicState.is_paused ? (
                         <>
@@ -428,7 +447,7 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => onControl('skip')}
-                      className="flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-white text-xs font-semibold transition-colors"
+                      className="flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-white text-xs font-semibold transition-colors cursor-pointer"
                     >
                       <SkipForward className="w-4 h-4" />
                       Skip Lagu
@@ -436,8 +455,33 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
 
                     <button
                       type="button"
+                      onClick={() => onControl('autoplay', !musicState.autoplay)}
+                      className={`flex items-center gap-1.5 px-3.5 py-2.5 rounded-full text-xs font-bold transition-colors cursor-pointer ${
+                        musicState.autoplay
+                          ? 'bg-[#DC95FF]/20 text-[#DC95FF] border border-[#DC95FF]/40'
+                          : 'bg-[#282828] hover:bg-[#3E3E3E] text-[#B3B3B3] hover:text-white'
+                      }`}
+                    >
+                      Autoplay {musicState.autoplay ? 'ON' : 'OFF'}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => onControl('mode_247', !musicState.mode_247)}
+                      className={`flex items-center gap-1.5 px-3.5 py-2.5 rounded-full text-xs font-bold transition-colors cursor-pointer ${
+                        musicState.mode_247
+                          ? 'bg-[#DC95FF]/20 text-[#DC95FF] border border-[#DC95FF]/40'
+                          : 'bg-[#282828] hover:bg-[#3E3E3E] text-[#B3B3B3] hover:text-white'
+                      }`}
+                    >
+                      <Radio className="w-3.5 h-3.5" />
+                      24/7 {musicState.mode_247 ? 'ON' : 'OFF'}
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={() => onAddFavorite(currentTrack)}
-                      className="flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-white text-xs font-semibold transition-colors"
+                      className="flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-white text-xs font-semibold transition-colors cursor-pointer"
                     >
                       <Heart className="w-4 h-4 text-[#DC95FF]" />
                       Simpan Favorit
@@ -445,8 +489,30 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="py-10 text-center text-sm text-[#B3B3B3]">
-                  Belum ada lagu yang diputar. Gunakan kolom pencarian di atas untuk memilih lagu dan penyanyi.
+                <div className="py-8 text-center space-y-4">
+                  <div className="text-sm text-[#B3B3B3]">
+                    Belum ada lagu yang diputar. Gunakan kolom pencarian di atas atau aktifkan Autoplay di bawah.
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => onControl('autoplay', true)}
+                      className="px-4 py-2 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs cursor-pointer"
+                    >
+                      Mulai Autoplay Sekarang
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onControl('mode_247', !musicState.mode_247)}
+                      className={`px-4 py-2 rounded-full text-xs font-bold cursor-pointer ${
+                        musicState.mode_247
+                          ? 'bg-[#DC95FF]/20 text-[#DC95FF] border border-[#DC95FF]/40'
+                          : 'bg-[#282828] text-white'
+                      }`}
+                    >
+                      Mode 24/7: {musicState.mode_247 ? 'ON' : 'OFF'}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -670,12 +736,35 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
                 Setiap item antrean memiliki UUID unik sehingga lagu yang sama dapat ditambahkan beberapa kali.
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onControl('autoplay', !musicState.autoplay)}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors cursor-pointer ${
+                  musicState.autoplay
+                    ? 'bg-[#DC95FF]/20 text-[#DC95FF] border border-[#DC95FF]/40'
+                    : 'bg-[#282828] hover:bg-[#3E3E3E] text-[#B3B3B3] hover:text-white'
+                }`}
+              >
+                Autoplay {musicState.autoplay ? 'ON' : 'OFF'}
+              </button>
+              <button
+                type="button"
+                onClick={() => onControl('mode_247', !musicState.mode_247)}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors cursor-pointer ${
+                  musicState.mode_247
+                    ? 'bg-[#DC95FF]/20 text-[#DC95FF] border border-[#DC95FF]/40'
+                    : 'bg-[#282828] hover:bg-[#3E3E3E] text-[#B3B3B3] hover:text-white'
+                }`}
+              >
+                <Radio className="w-3.5 h-3.5" />
+                Mode 24/7 {musicState.mode_247 ? 'ON' : 'OFF'}
+              </button>
               <button
                 type="button"
                 onClick={() => onControl('shuffle')}
                 disabled={musicState.queue.length < 2}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#282828] hover:bg-[#3E3E3E] disabled:opacity-40 text-xs font-semibold text-white"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#282828] hover:bg-[#3E3E3E] disabled:opacity-40 text-xs font-semibold text-white cursor-pointer"
               >
                 <Shuffle className="w-3.5 h-3.5" />
                 Acak Antrean
@@ -684,7 +773,7 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
                 type="button"
                 onClick={() => onControl('clear')}
                 disabled={musicState.queue.length === 0}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-rose-950/60 hover:bg-rose-900/70 border border-rose-800/50 disabled:opacity-40 text-xs font-semibold text-rose-200"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-rose-950/60 hover:bg-rose-900/70 border border-rose-800/50 disabled:opacity-40 text-xs font-semibold text-rose-200 cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 Bersihkan Antrean

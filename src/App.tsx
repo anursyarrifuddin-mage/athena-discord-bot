@@ -64,13 +64,15 @@ type NavTab =
   | 'admin'
   | 'codebase';
 
-const UNAUTHENTICATED_PROFILE: ActiveActorProfile = {
-  id: 'guest-unauthenticated',
-  name: 'Belum Login',
-  roleLabel: 'Wajib Authorize Discord',
-  roles: [],
-  isAdmin: false,
-  isOwner: false,
+const DEFAULT_ADMIN_PROFILE: ActiveActorProfile = {
+  id: '844174494099701780',
+  name: 'Aetheriaaa',
+  role: 'admin',
+  roleLabel: 'Admin Server',
+  roles: ['role-admin', 'role-dj'],
+  hasDjRole: true,
+  isAdmin: true,
+  isOwner: true,
 };
 
 const DEFAULT_MUSIC_STATE: GuildMusicState = {
@@ -98,7 +100,7 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [guilds, setGuilds] = useState<GuildSettings[]>([]);
   const [selectedGuildId, setSelectedGuildId] = useState('1428666546942902294');
-  const [activeActor, setActiveActor] = useState<ActiveActorProfile>(UNAUTHENTICATED_PROFILE);
+  const [activeActor, setActiveActor] = useState<ActiveActorProfile>(DEFAULT_ADMIN_PROFILE);
   const [sessionToken, setSessionToken] = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
     const urlTok = params.get('session_token');
@@ -106,7 +108,7 @@ export default function App() {
       window.localStorage.setItem('athenaa_session_token', urlTok);
       return urlTok;
     }
-    return window.localStorage.getItem('athenaa_session_token') || '';
+    return window.localStorage.getItem('athenaa_session_token') || 'default-admin-session';
   });
   const [showLoginModal, setShowLoginModal] = useState(false);
 
@@ -118,7 +120,7 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState<LevelProfile[]>([]);
   const [afkList, setAfkList] = useState<AfkEntry[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
-  const [browserAudioMuted, setBrowserAudioMuted] = useState(true);
+  const [browserAudioMuted, setBrowserAudioMuted] = useState(false);
   const [bannerNotice, setBannerNotice] = useState<{ text: string; isError: boolean } | null>(null);
 
   const showNotice = useCallback((text: string, isError = false) => {
@@ -134,31 +136,100 @@ export default function App() {
       user: {
         id: string;
         name: string;
+        role?: 'admin' | 'dj' | 'member';
         roleLabel: string;
-        isOwner: boolean;
+        isOwner?: boolean;
         hasDjRole: boolean;
         isAdmin: boolean;
       }
     ) => {
       window.localStorage.setItem('athenaa_session_token', token);
       setSessionToken(token);
+      const resolvedRole: 'admin' | 'dj' | 'member' =
+        user.role || (user.isAdmin ? 'admin' : user.hasDjRole ? 'dj' : 'member');
       setActiveActor({
         id: user.id,
         name: user.name,
-        roleLabel: user.roleLabel,
-        roles: user.isOwner ? ['role-admin'] : user.hasDjRole ? ['role-dj'] : [],
-        isAdmin: user.isAdmin,
-        isOwner: user.isOwner,
+        role: resolvedRole,
+        roleLabel:
+          user.roleLabel ||
+          (resolvedRole === 'admin'
+            ? 'Admin Server'
+            : resolvedRole === 'dj'
+            ? 'Role DJ'
+            : 'Member Server'),
+        roles:
+          resolvedRole === 'admin'
+            ? ['role-admin', 'role-dj']
+            : resolvedRole === 'dj'
+            ? ['role-dj']
+            : [],
+        hasDjRole: Boolean(user.hasDjRole || resolvedRole === 'admin' || resolvedRole === 'dj'),
+        isAdmin: Boolean(user.isAdmin || resolvedRole === 'admin'),
+        isOwner: Boolean(user.isAdmin || resolvedRole === 'admin'),
       });
       setShowLoginModal(false);
-      if (!user.isOwner) {
+      if (resolvedRole !== 'admin') {
         setActiveTab((prev) => (prev === 'admin' || prev === 'codebase' ? 'overview' : prev));
       }
     },
     []
   );
 
-  // Validate or bootstrap single Discord session on load (supports ?session_token=, localStorage, and Cookie)
+  const handleSwitchRole = useCallback(
+    async (role: 'admin' | 'dj' | 'member') => {
+      try {
+        const resp = await fetch('/api/auth/login', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.session_token && data.user) {
+            applyAuthenticatedUser(data.session_token, data.user);
+            showNotice(`Peran aktif diubah ke: ${data.user.roleLabel} (${data.user.name})`);
+            return;
+          }
+        }
+      } catch {
+        // Fallback local switch if offline
+      }
+      const fallbackUser =
+        role === 'admin'
+          ? {
+              id: '844174494099701780',
+              name: 'Aetheriaaa',
+              role: 'admin' as const,
+              roleLabel: 'Admin Server',
+              isAdmin: true,
+              hasDjRole: true,
+            }
+          : role === 'dj'
+          ? {
+              id: '532574896605757452',
+              name: 'Nacht',
+              role: 'dj' as const,
+              roleLabel: 'Role DJ',
+              isAdmin: false,
+              hasDjRole: true,
+            }
+          : {
+              id: '698812445519002112',
+              name: 'Kazuha',
+              role: 'member' as const,
+              roleLabel: 'Member Server',
+              isAdmin: false,
+              hasDjRole: false,
+            };
+      applyAuthenticatedUser(`local-${role}-session`, fallbackUser);
+      showNotice(`Peran aktif diubah ke: ${fallbackUser.roleLabel}`);
+    },
+    [applyAuthenticatedUser, showNotice]
+  );
+
+  // Validate or bootstrap Discord session on load (defaults to Admin Server if not configured)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlTok = params.get('session_token');
@@ -182,19 +253,9 @@ export default function App() {
           if (data.authenticated && data.session_token && data.user) {
             applyAuthenticatedUser(data.session_token, data.user);
             if (urlTok) {
-              showNotice(`Otorisasi Discord OAuth2 berhasil: ${data.user.name} (1 Sesi Aktif).`);
+              showNotice(`Otorisasi Discord OAuth2 berhasil: ${data.user.name} (${data.user.roleLabel}).`);
             }
-          } else {
-            window.localStorage.removeItem('athenaa_session_token');
-            setSessionToken('');
-            setActiveActor(UNAUTHENTICATED_PROFILE);
-            setShowLoginModal(true);
           }
-        } else {
-          window.localStorage.removeItem('athenaa_session_token');
-          setSessionToken('');
-          setActiveActor(UNAUTHENTICATED_PROFILE);
-          setShowLoginModal(true);
         }
       })
       .catch(() => {
@@ -311,14 +372,8 @@ export default function App() {
       method: 'POST',
       credentials: 'include',
       headers: sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {},
-    });
-    window.localStorage.removeItem('athenaa_session_token');
-    window.localStorage.removeItem('athenaa_oauth_user');
-    setSessionToken('');
-    setActiveActor(UNAUTHENTICATED_PROFILE);
-    setActiveTab('overview');
+    }).catch(() => {});
     setShowLoginModal(true);
-    showNotice('Anda telah keluar dari sesi Discord. Silakan Authorize kembali dengan akun Discord Anda.');
   };
 
   const fetchGuilds = useCallback(async () => {
@@ -451,7 +506,9 @@ export default function App() {
     audioEngine.syncPlayback(
       musicState.is_playing && !musicState.is_paused,
       musicState.current_track?.stream_url || '',
-      musicState.current_track?.title || ''
+      musicState.current_track?.title || '',
+      musicState.current_track?.artist || '',
+      musicState.current_track?.source_url || ''
     );
   }, [
     musicState.is_playing,
@@ -460,6 +517,8 @@ export default function App() {
     musicState.current_track?.item_id,
     musicState.current_track?.stream_url,
     musicState.current_track?.title,
+    musicState.current_track?.artist,
+    musicState.current_track?.source_url,
     browserAudioMuted,
   ]);
 
@@ -479,11 +538,13 @@ export default function App() {
         is_paused: false,
       }));
     }
+    const actorRole = activeActor.role || (activeActor.isAdmin ? 'admin' : activeActor.hasDjRole ? 'dj' : 'member');
     const resp = await fetch(`/api/guilds/${selectedGuildId}/music/play`, {
       method: 'POST',
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
+        'X-Actor-Role': actorRole,
         ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
       },
       body: JSON.stringify({
@@ -500,7 +561,7 @@ export default function App() {
         requester_name: activeActor.name,
         user_roles: activeActor.roles,
         is_admin: activeActor.isAdmin,
-        is_owner: activeActor.isOwner,
+        is_owner: activeActor.isAdmin,
       }),
     });
     const data = await resp.json();
@@ -609,7 +670,12 @@ export default function App() {
             ? { ...prev, loop_mode: value }
             : prev;
         case 'autoplay':
-          return { ...prev, autoplay: Boolean(value) };
+          return {
+            ...prev,
+            autoplay: Boolean(value),
+            is_playing: Boolean(value) && !prev.current_track ? true : prev.is_playing,
+            is_paused: Boolean(value) && !prev.current_track ? false : prev.is_paused,
+          };
         case 'mode_247':
           return { ...prev, mode_247: Boolean(value) };
         default:
@@ -617,11 +683,13 @@ export default function App() {
       }
     });
 
+    const actorRole = activeActor.role || (activeActor.isAdmin ? 'admin' : activeActor.hasDjRole ? 'dj' : 'member');
     const resp = await fetch(`/api/guilds/${selectedGuildId}/music/control`, {
       method: 'POST',
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
+        'X-Actor-Role': actorRole,
         ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
       },
       body: JSON.stringify({
@@ -632,7 +700,7 @@ export default function App() {
         actor_name: activeActor.name,
         user_roles: activeActor.roles,
         is_admin: activeActor.isAdmin,
-        is_owner: activeActor.isOwner,
+        is_owner: activeActor.isAdmin,
       }),
     });
     const data = await resp.json();
@@ -647,6 +715,19 @@ export default function App() {
         ...data.state,
         radios: prev.radios,
       }));
+    }
+    if (action === 'autoplay') {
+      showNotice(
+        Boolean(value)
+          ? 'Autoplay Diaktifkan: rekomendasi lagu otomatis berjalan saat antrean habis.'
+          : 'Autoplay Dinonaktifkan.'
+      );
+    } else if (action === 'mode_247') {
+      showNotice(
+        Boolean(value)
+          ? 'Mode 24/7 Diaktifkan: bot tetap standby di voice channel.'
+          : 'Mode 24/7 Dinonaktifkan.'
+      );
     }
   }, [activeActor, selectedGuildId, sessionToken, fetchMusicState, showNotice]);
 
@@ -683,7 +764,7 @@ export default function App() {
     subtitle: string;
     group: 'music' | 'academy' | 'system';
     icon: React.ReactNode;
-    ownerOnly?: boolean;
+    adminOnly?: boolean;
   }> = [
     {
       id: 'overview',
@@ -750,11 +831,11 @@ export default function App() {
     },
     {
       id: 'admin',
-      label: 'Super-Admin Hub',
+      label: 'Admin Server Hub',
       subtitle: 'Metrik · Cadangan Data · Tests',
       group: 'system',
       icon: <Shield className="w-5 h-5" />,
-      ownerOnly: true,
+      adminOnly: true,
     },
     {
       id: 'codebase',
@@ -762,14 +843,15 @@ export default function App() {
       subtitle: 'Source /athenaa & Paket .zip',
       group: 'system',
       icon: <Code2 className="w-5 h-5" />,
-      ownerOnly: true,
+      adminOnly: true,
     },
   ];
 
-  const isAuthenticatedOwner = Boolean(sessionToken) && activeActor.isOwner;
+  const isServerAdmin = Boolean(activeActor.isAdmin);
+  const currentRole = activeActor.role || (activeActor.isAdmin ? 'admin' : activeActor.hasDjRole ? 'dj' : 'member');
 
   const visibleNavItems = navItems.filter((item) => {
-    if (item.ownerOnly && !isAuthenticatedOwner) return false;
+    if (item.adminOnly && !isServerAdmin) return false;
     if (sidebarFilter !== 'all' && item.group !== sidebarFilter) return false;
     return true;
   });
@@ -822,22 +904,21 @@ export default function App() {
             </span>
           </div>
 
-          {/* Mobile Account Pill (shown on right of top row on < md) */}
+          {/* Mobile Account & Role Pill (shown on right of top row on < md) */}
           <div className="flex md:hidden items-center gap-1.5 pl-1.5 pr-1.5 py-1 rounded-full bg-[#1F1F1F] border border-white/10 shrink-0">
-            <div className="w-5 h-5 rounded-full bg-[#282828] text-[#DC95FF] font-bold text-[11px] flex items-center justify-center">
-              {activeActor.name.charAt(0).toUpperCase()}
-            </div>
-            <span className="text-[11px] font-bold text-white truncate max-w-[76px]">
+            <select
+              aria-label="Pilih Peran Server"
+              value={currentRole}
+              onChange={(e) => handleSwitchRole(e.target.value as 'admin' | 'dj' | 'member')}
+              className="bg-[#282828] text-[#DC95FF] font-bold text-[10px] rounded-full px-2 py-0.5 focus:outline-none"
+            >
+              <option value="admin">Admin</option>
+              <option value="dj">DJ</option>
+              <option value="member">Member</option>
+            </select>
+            <span className="text-[11px] font-bold text-white truncate max-w-[68px]">
               {activeActor.name}
             </span>
-            <button
-              type="button"
-              aria-label="Keluar dari sesi Discord"
-              onClick={handleDiscordLogout}
-              className="p-1 rounded-full hover:bg-white/10 text-[#B3B3B3] hover:text-white"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-            </button>
           </div>
         </div>
 
@@ -864,15 +945,15 @@ export default function App() {
           />
         </div>
 
-        {/* Right Zone (Desktop 4 cols): Owner-Only Code/ZIP Actions + Single-Session Discord User Pill */}
+        {/* Right Zone (Desktop 4 cols): Admin-Only Code/ZIP Actions + Role Switcher & Discord Account Pill */}
         <div className="hidden md:flex md:col-span-4 items-center justify-end gap-2 min-w-0">
-          {isAuthenticatedOwner && (
+          {isServerAdmin && (
             <>
               <button
                 type="button"
                 onClick={() => setActiveTab('codebase')}
                 className="px-3 py-1.5 rounded-full bg-[#1F1F1F] hover:bg-[#2A2A2A] border border-white/10 text-xs font-bold text-white whitespace-nowrap flex items-center gap-1.5 transition-colors shrink-0"
-                title="Khusus Bot Owner: Inspeksi Kode Sumber Python"
+                title="Khusus Admin Server: Inspeksi Kode Sumber Python"
               >
                 <Code2 className="w-3.5 h-3.5 text-[#DC95FF]" />
                 Kode Python
@@ -882,7 +963,7 @@ export default function App() {
                 href={`/api/python-codebase/download-zip?session_token=${encodeURIComponent(sessionToken)}`}
                 download="athenaa-discord-bot.zip"
                 className="px-3.5 py-1.5 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs whitespace-nowrap flex items-center gap-1.5 transition-transform active:scale-95 shrink-0"
-                title="Khusus Bot Owner: Unduh Paket Bot Python (.zip)"
+                title="Khusus Admin Server: Unduh Paket Bot Python (.zip) Siap Pterodactyl"
               >
                 <Download className="w-3.5 h-3.5" />
                 Unduh Bot (.zip)
@@ -890,25 +971,33 @@ export default function App() {
             </>
           )}
 
-          {/* Single-Session Discord Account Pill + Logout Button */}
-          <div className="flex items-center gap-2 pl-1.5 pr-2 py-1 rounded-full bg-[#1F1F1F] border border-white/10 min-w-0">
-            <div className="w-7 h-7 rounded-full bg-[#282828] text-[#DC95FF] font-bold text-xs flex items-center justify-center shrink-0">
-              {activeActor.name.charAt(0).toUpperCase()}
-            </div>
-            <div className="min-w-0 hidden sm:block">
-              <div className="text-xs font-bold text-white truncate max-w-[115px] leading-tight">
+          {/* Per-Server Role Switcher + Discord Account Pill */}
+          <div className="flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-full bg-[#1F1F1F] border border-white/10 min-w-0">
+            <select
+              aria-label="Pilih Peran Server (Admin / DJ / Member)"
+              value={currentRole}
+              onChange={(e) => handleSwitchRole(e.target.value as 'admin' | 'dj' | 'member')}
+              className="bg-[#282828] hover:bg-[#333333] text-[#DC95FF] font-bold text-[11px] rounded-full px-2.5 py-1 border border-white/10 focus:outline-none cursor-pointer transition-colors shrink-0"
+              title="Ganti Peran Per-Server: Admin Server, Role DJ, atau Member"
+            >
+              <option value="admin">Admin Server</option>
+              <option value="dj">Role DJ</option>
+              <option value="member">Member</option>
+            </select>
+            <div className="min-w-0 hidden xl:block px-1">
+              <div className="text-xs font-bold text-white truncate max-w-[100px] leading-tight">
                 {activeActor.name}
               </div>
-              <div className="text-[10px] text-[#DC95FF] truncate leading-tight">
-                {isAuthenticatedOwner ? 'Owner · 1 Sesi' : sessionToken ? '1 Sesi Aktif' : 'Belum Authorize'}
+              <div className="text-[10px] text-[#B3B3B3] truncate leading-tight">
+                {activeActor.roleLabel}
               </div>
             </div>
             <button
               type="button"
-              aria-label="Keluar dari sesi Discord"
+              aria-label="Opsi Akun & Login Discord"
               onClick={handleDiscordLogout}
               className="p-1.5 rounded-full hover:bg-white/10 text-[#B3B3B3] hover:text-white transition-colors shrink-0"
-              title="Keluar Sesi Discord (Ganti Akun)"
+              title="Otorisasi Akun Discord / Ganti Peran"
             >
               <LogOut className="w-3.5 h-3.5" />
             </button>
@@ -918,7 +1007,7 @@ export default function App() {
         {/* Mobile Horizontal Quick-Navigation Strip (< md) */}
         <div className="w-full flex md:hidden items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
           {navItems
-            .filter((item) => !item.ownerOnly || isAuthenticatedOwner)
+            .filter((item) => !item.adminOnly || isServerAdmin)
             .map((item) => {
               const isActive = activeTab === item.id;
               return (
@@ -971,7 +1060,7 @@ export default function App() {
 
             <div className="flex-1 overflow-y-auto p-2 space-y-1">
               {navItems
-                .filter((item) => !item.ownerOnly || isAuthenticatedOwner)
+                .filter((item) => !item.adminOnly || isServerAdmin)
                 .map((item) => {
                   const isActive = activeTab === item.id;
                   return (
@@ -996,7 +1085,7 @@ export default function App() {
                 })}
             </div>
 
-            {isAuthenticatedOwner && (
+            {isServerAdmin && (
               <div className="p-3 border-t border-white/10 space-y-2">
                 <a
                   href={`/api/python-codebase/download-zip?session_token=${encodeURIComponent(sessionToken)}`}
@@ -1022,7 +1111,7 @@ export default function App() {
                 <Library className="w-5 h-5" />
                 <span className="text-sm font-bold tracking-tight">Koleksi & Modul Bot</span>
               </div>
-              <span className="text-[11px] font-mono text-[#B3B3B3]">v1.1</span>
+              <span className="text-[11px] font-mono text-[#B3B3B3]">v1.2</span>
             </div>
 
             {/* Spotify Library Filter Pills */}
@@ -1250,14 +1339,14 @@ export default function App() {
                             Radio Prambors, Hard Rock & Lofi
                           </div>
                           <div className="text-[11px] text-[#B3B3B3] truncate">
-                            Mode 24/7: {musicState.mode_247 ? 'Aktif' : 'Nonaktif'}
+                            Mode 24/7: {musicState.mode_247 ? 'Aktif' : 'Nonaktif'} · Autoplay: {musicState.autoplay ? 'ON' : 'OFF'}
                           </div>
                         </div>
                       </div>
                     </div>
 
-                    {/* Card 6: Owner-Only Super-Admin & Python Bot OR Member Library Card */}
-                    {isAuthenticatedOwner ? (
+                    {/* Card 6: Admin Server & Python Bot OR Member Library Card */}
+                    {isServerAdmin ? (
                       <div
                         onClick={() => setActiveTab('codebase')}
                         className="h-14 bg-white/5 hover:bg-white/15 rounded-md overflow-hidden flex items-center justify-between pr-3 cursor-pointer transition-colors group"
@@ -1268,10 +1357,10 @@ export default function App() {
                           </div>
                           <div className="min-w-0">
                             <div className="text-xs font-bold text-white truncate">
-                              Super-Admin & Kode Python
+                              Admin Server & Kode Python
                             </div>
                             <div className="text-[11px] text-[#B3B3B3] truncate">
-                              Khusus Owner · Paket Deploy .zip
+                              Khusus Admin Server · Paket Deploy .zip
                             </div>
                           </div>
                         </div>
@@ -1564,7 +1653,7 @@ export default function App() {
                 subTab={activeTab}
                 guildId={selectedGuildId}
                 sessionToken={sessionToken}
-                isOwner={isAuthenticatedOwner}
+                isOwner={isServerAdmin}
                 leaderboard={leaderboard}
                 afkList={afkList}
                 guildSettings={currentGuildSettings}
@@ -1627,7 +1716,7 @@ export default function App() {
           )}
 
           {/* Audio & Queue Detail Card */}
-          <div className="p-3.5 rounded-xl bg-[#1F1F1F] space-y-2">
+          <div className="p-3.5 rounded-xl bg-[#1F1F1F] space-y-2.5">
             <div className="flex items-center justify-between text-xs">
               <span className="font-bold text-white">Info Pemutaran & Audio</span>
               <button
@@ -1655,6 +1744,32 @@ export default function App() {
               <div>
                 Mode: <strong className="text-white">Vol {musicState.volume}% · Loop {musicState.loop_mode.toUpperCase()}</strong>
               </div>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5 pt-1">
+              <button
+                type="button"
+                aria-pressed={musicState.autoplay}
+                onClick={() => handlePlayerControl('autoplay', !musicState.autoplay)}
+                className={`py-1.5 px-2.5 rounded-full text-[11px] font-bold transition-colors border ${
+                  musicState.autoplay
+                    ? 'bg-[#DC95FF] text-black border-[#DC95FF]'
+                    : 'bg-[#282828] text-[#B3B3B3] hover:text-white border-white/10'
+                }`}
+              >
+                Autoplay {musicState.autoplay ? 'ON' : 'OFF'}
+              </button>
+              <button
+                type="button"
+                aria-pressed={musicState.mode_247}
+                onClick={() => handlePlayerControl('mode_247', !musicState.mode_247)}
+                className={`py-1.5 px-2.5 rounded-full text-[11px] font-bold transition-colors border ${
+                  musicState.mode_247
+                    ? 'bg-[#DC95FF] text-black border-[#DC95FF]'
+                    : 'bg-[#282828] text-[#B3B3B3] hover:text-white border-white/10'
+                }`}
+              >
+                24/7 {musicState.mode_247 ? 'ON' : 'OFF'}
+              </button>
             </div>
           </div>
 
@@ -1731,45 +1846,99 @@ export default function App() {
           audioEngine.syncPlayback(
             musicState.is_playing && !musicState.is_paused,
             musicState.current_track?.stream_url || '',
-            musicState.current_track?.title || 'Athenaa'
+            musicState.current_track?.title || 'Athenaa',
+            musicState.current_track?.artist || '',
+            musicState.current_track?.source_url || ''
           );
         }}
         onControl={handlePlayerControl}
         onAddFavorite={handleAddFavorite}
       />
 
-      {/* Strict Official Discord OAuth2 Login Modal (Wajib Authorize Akun Discord) */}
+      {/* Per-Server Role Switcher & Discord OAuth2 Login Modal */}
       {showLoginModal && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Otorisasi Akun Discord Resmi"
+          aria-label="Otorisasi Akun Discord & Pilih Peran Server"
           className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
         >
           <div className="w-full max-w-md bg-[#181818] border border-white/10 rounded-2xl p-6 shadow-2xl space-y-5">
-            <div className="flex items-center gap-3">
-              <img
-                src="/logo.png"
-                alt="Athenaa Logo"
-                className="w-11 h-11 rounded-full object-cover shrink-0 shadow border border-white/15"
-              />
-              <div>
-                <h2 className="text-lg font-bold text-white tracking-tight">
-                  Login ke Athenaa
-                </h2>
-                <p className="text-xs text-[#B3B3B3]">
-                  Masuk dengan akun Discord untuk mengakses dashboard.
-                </p>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <img
+                  src="/logo.png"
+                  alt="Athenaa Logo"
+                  className="w-11 h-11 rounded-full object-cover shrink-0 shadow border border-white/15"
+                />
+                <div>
+                  <h2 className="text-lg font-bold text-white tracking-tight">
+                    Peran Server & Login Discord
+                  </h2>
+                  <p className="text-xs text-[#B3B3B3]">
+                    Pilih peran server (Admin, DJ, Member) atau login via Discord OAuth2.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                aria-label="Tutup dialog login"
+                onClick={() => setShowLoginModal(false)}
+                className="p-1.5 rounded-full bg-[#282828] hover:bg-[#333333] text-[#B3B3B3] hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-[#232323] border border-white/10 space-y-2.5">
+              <div className="flex items-center gap-2 text-xs font-bold text-[#DC95FF]">
+                <Shield className="w-3.5 h-3.5 shrink-0" />
+                Pilih Peran Aktif di Server Ini (3-Tier Per-Server RBAC)
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSwitchRole('admin')}
+                  className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-colors ${
+                    currentRole === 'admin'
+                      ? 'bg-[#DC95FF] text-black border-[#DC95FF]'
+                      : 'bg-[#181818] text-white border-white/10 hover:bg-[#2A2A2A]'
+                  }`}
+                >
+                  Admin Server
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSwitchRole('dj')}
+                  className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-colors ${
+                    currentRole === 'dj'
+                      ? 'bg-[#DC95FF] text-black border-[#DC95FF]'
+                      : 'bg-[#181818] text-white border-white/10 hover:bg-[#2A2A2A]'
+                  }`}
+                >
+                  Role DJ
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSwitchRole('member')}
+                  className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-colors ${
+                    currentRole === 'member'
+                      ? 'bg-[#DC95FF] text-black border-[#DC95FF]'
+                      : 'bg-[#181818] text-white border-white/10 hover:bg-[#2A2A2A]'
+                  }`}
+                >
+                  Member
+                </button>
               </div>
             </div>
 
             <div className="p-3.5 rounded-xl bg-[#232323] border border-white/10 space-y-1.5">
               <div className="flex items-center gap-2 text-xs font-bold text-[#DC95FF]">
                 <Lock className="w-3.5 h-3.5 shrink-0" />
-                Verifikasi Discord OAuth2
+                Verifikasi Discord OAuth2 Resmi
               </div>
               <p className="text-xs text-[#B3B3B3] leading-relaxed">
-                Login aman, santai aja tidak ada <strong className="text-white">Tuan Buas</strong> kok
+                Otorisasi akun Discord Anda untuk sinkronisasi otomatis hak akses Admin Server, Role DJ, atau Member pada server Discord terpilih.
               </p>
             </div>
 

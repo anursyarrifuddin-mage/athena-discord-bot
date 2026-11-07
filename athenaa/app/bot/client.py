@@ -205,6 +205,7 @@ SLASH_COMMAND_SPECIFICATIONS: List[Dict[str, str]] = [
     {"name": "/8ball", "params": "pertanyaan", "category": "Minigames", "description": "Tanyakan pertanyaan ke Kerang Ajaib Athenaa"},
     {"name": "/dadu", "params": "[sisi]", "category": "Minigames", "description": "Lempar dadu keberuntungan (d6, d20, d100)"},
     {"name": "/invite", "params": "", "category": "Utilitas", "description": "Tampilkan tautan resmi untuk mengundang Athenaa Bot ke server Discord lain"},
+    {"name": "/admin", "params": "aksi", "category": "Admin Server", "description": "Panel Admin Server (Backup SQLite, Sync Slash Commands, Reset Voice)"},
 ]
 
 
@@ -912,6 +913,10 @@ def build_discord_bot(
                     self._schedule_coro(self.apply_web_control(guild_id, "seek"))
                 elif event_type == "volume_changed":
                     self._schedule_coro(self.apply_web_control(guild_id, "volume"))
+                elif event_type == "autoplay_changed":
+                    self._schedule_coro(self.apply_web_control(guild_id, "autoplay", st_curr.autoplay))
+                elif event_type == "mode_247_changed":
+                    self._schedule_coro(self.apply_web_control(guild_id, "mode_247", st_curr.mode_247))
             except Exception as exc_cb:
                 logger.error("Gagal menyinkronkan event queue (%s) ke VoiceClient: %s", event_type, exc_cb)
 
@@ -1368,8 +1373,6 @@ def build_discord_bot(
                     pass
 
             # 2. JIKA BOT BELUM CONNECT DI VOICE:
-            # HANYA boleh join ke Voice Channel tempat si peminta lagu (requester) berada!
-            # Tidak boleh nyelonong ke Voice Channel teman/orang lain jika requester tidak di voice.
             target_channel: Optional[discord.VoiceChannel] = None
 
             if requester_user_id and str(requester_user_id).isdigit():
@@ -1382,18 +1385,29 @@ def build_discord_bot(
                 if member and member.voice and isinstance(member.voice.channel, discord.VoiceChannel):
                     target_channel = member.voice.channel
 
-            # Hanya izinkan reconnect otomatis ke channel terakhir jika sedang Autoplay / Mode 24/7
-            # DAN di channel tersebut masih ada pendengar (manusia) atau Mode 24/7 aktif.
+            # Fallback 1: gunakan preferred_channel_id jika ada member manusia di dalamnya atau mode 24/7 / web control
             if not target_channel and preferred_channel_id and str(preferred_channel_id).isdigit():
-                if requester_user_id == "system-autoplay" or st.mode_247:
-                    ch = guild.get_channel(int(preferred_channel_id))
-                    if isinstance(ch, discord.VoiceChannel):
-                        if st.mode_247 or any(not m.bot for m in ch.members):
-                            target_channel = ch
+                ch = guild.get_channel(int(preferred_channel_id))
+                if isinstance(ch, discord.VoiceChannel):
+                    if st.mode_247 or any(not getattr(m, "bot", False) for m in ch.members) or not str(requester_user_id or "").isdigit():
+                        target_channel = ch
+
+            # Fallback 2: cari voice channel mana pun di guild yang sedang berisi member manusia
+            if not target_channel:
+                for ch in getattr(guild, "voice_channels", []) or []:
+                    if any(not getattr(m, "bot", False) for m in getattr(ch, "members", [])):
+                        target_channel = ch
+                        break
+
+            # Fallback 3: jika mode 24/7 aktif, masuk ke voice channel pertama yang tersedia di guild
+            if not target_channel and st.mode_247:
+                vcs = getattr(guild, "voice_channels", []) or []
+                if vcs:
+                    target_channel = vcs[0]
 
             if not target_channel:
                 logger.info(
-                    "Batal join voice di Guild %s: Requester (%s) sedang tidak berada di Voice Channel.",
+                    "Batal join voice di Guild %s: Tidak ditemukan Voice Channel aktif untuk requester (%s).",
                     guild.name,
                     requester_user_id,
                 )
@@ -1433,7 +1447,7 @@ def build_discord_bot(
                 return False
 
             target_item_id = track.item_id
-            sync_key = f"{target_item_id}:{int(seek_seconds)}:{int(st.volume)}"
+            sync_key = f"{target_item_id}:{int(seek_seconds)}"
 
             guild_obj = self.get_guild(int(guild_id)) if guild_id.isdigit() else None
             vc_existing: Optional[discord.VoiceClient] = guild_obj.voice_client if guild_obj else None  # type: ignore
@@ -1445,11 +1459,16 @@ def build_discord_bot(
                 if (
                     seek_seconds == 0
                     and self._active_vc_track_id.get(guild_id) == target_item_id
-                    and self._active_vc_volume.get(guild_id, st.volume) == st.volume
                     and vc_existing
                     and vc_existing.is_connected()
                     and (vc_existing.is_playing() or vc_existing.is_paused())
                 ):
+                    if vc_existing.source and hasattr(vc_existing.source, "volume"):
+                        try:
+                            vc_existing.source.volume = max(0.01, min(2.0, st.volume / 100.0))
+                            self._active_vc_volume[guild_id] = st.volume
+                        except Exception:
+                            pass
                     return True
 
             self._syncing_track_key[guild_id] = sync_key
@@ -1535,24 +1554,12 @@ def build_discord_bot(
                     ).replace('"', "")
                     before_opts = (
                         f'-user_agent "{ua_val}" '
-                        "-reconnect 1 -reconnect_streamed 1 "
-                        "-reconnect_on_network_error 1 -reconnect_on_http_error 4xx,5xx "
-                        "-reconnect_delay_max 2 -rw_timeout 8000000 "
-                        "-thread_queue_size 4096 -probesize 256k -nostdin"
+                        "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin"
                     )
                     if seek_seconds > 0 and track.source_type != "radio":
                         before_opts = f"-ss {int(seek_seconds)} {before_opts}"
 
-                    vol_float = max(0.01, min(1.0, st.volume / 100.0))
-                    af_parts = []
-                    if st.volume != 100:
-                        af_parts.append(f"volume={vol_float:.2f}")
-                    af_parts.append("aresample=async=1:min_hard_comp=0.100000:first_pts=0")
-                    filter_chain = ",".join(af_parts)
-                    options = (
-                        f'-vn -compression_level 4 -frame_duration 20 -vbr on '
-                        f'-application audio -threads 2 -bufsize 512k -filter:a "{filter_chain}"'
-                    )
+                    vol_float = max(0.01, min(2.0, st.volume / 100.0))
 
                     if vc.is_playing() or vc.is_paused():
                         vc.stop()
@@ -1569,13 +1576,24 @@ def build_discord_bot(
                                 self._handle_track_finished(guild_id, my_gen), self.loop
                             )
 
-                    audio_source = discord.FFmpegOpusAudio(
-                        stream_url,
-                        bitrate=128,
-                        executable=ffmpeg_bin,
-                        before_options=before_opts,
-                        options=options,
-                    )
+                    try:
+                        pcm_audio = discord.FFmpegPCMAudio(
+                            stream_url,
+                            executable=ffmpeg_bin,
+                            before_options=before_opts,
+                            options="-vn -b:a 192k -bufsize 1024k",
+                        )
+                        audio_source: Any = discord.PCMVolumeTransformer(pcm_audio, volume=vol_float)
+                    except Exception:
+                        af_chain = f"volume={vol_float:.2f},aresample=async=1:first_pts=0"
+                        audio_source = discord.FFmpegOpusAudio(
+                            stream_url,
+                            bitrate=128,
+                            executable=ffmpeg_bin,
+                            before_options=before_opts,
+                            options=f'-vn -b:a 128k -bufsize 1024k -filter:a "{af_chain}"',
+                        )
+
                     vc.play(audio_source, after=_after_track)
                     if st.is_paused:
                         vc.pause()
@@ -1590,14 +1608,15 @@ def build_discord_bot(
                     await self._notify_web(guild_id)
                     self._schedule_prefetch(guild_id)
                     logger.info(
-                        "Memutar audio '%s — %s' di Voice Channel '%s' (buffer=4096, opus_lvl=4).",
+                        "Memutar audio '%s — %s' di Voice Channel '%s' (vol=%d%%).",
                         track.title,
                         track.artist,
                         st.voice_channel_name,
+                        st.volume,
                     )
                     return True
             except Exception as exc:
-                logger.error("Gagal memutar FFmpegOpusAudio: %s", exc)
+                logger.error("Gagal memutar audio di Discord Voice: %s", exc)
                 return False
             finally:
                 if self._syncing_track_key.get(guild_id) == sync_key:
@@ -1652,10 +1671,8 @@ def build_discord_bot(
 
         async def apply_web_control(self, guild_id: str, action: str, value: Any = None) -> None:
             guild = self.get_guild(int(guild_id)) if guild_id.isdigit() else None
-            if not guild:
-                return
-            vc: Optional[discord.VoiceClient] = guild.voice_client  # type: ignore
             st = queue_service.get_state(guild_id)
+            vc: Optional[discord.VoiceClient] = guild.voice_client if guild else None  # type: ignore
 
             if action == "pause":
                 self._track_pause_mono[guild_id] = time.monotonic()
@@ -1687,21 +1704,22 @@ def build_discord_bot(
                     self._playback_gen[guild_id] = self._playback_gen.get(guild_id, 0) + 1
                     self._active_vc_track_id.pop(guild_id, None)
                     vc.stop()
-            elif action == "volume" and st.current_track:
-                if (
-                    self._active_vc_track_id.get(guild_id) == st.current_track.item_id
-                    and self._active_vc_volume.get(guild_id) == st.volume
-                    and vc
-                    and (vc.is_playing() or vc.is_paused())
-                ):
-                    await self._notify_web(guild_id)
-                    return
-                await self.start_or_sync_voice_playback(
-                    guild_id,
-                    st.current_track.requester_id,
-                    seek_seconds=st.position_sec,
-                    force_restart=True,
-                )
+            elif action == "volume":
+                if vc and vc.source and hasattr(vc.source, "volume"):
+                    try:
+                        vc.source.volume = max(0.01, min(2.0, st.volume / 100.0))
+                        self._active_vc_volume[guild_id] = st.volume
+                        await self._notify_web(guild_id)
+                        return
+                    except Exception:
+                        pass
+                if st.current_track and vc and (vc.is_playing() or vc.is_paused()):
+                    await self.start_or_sync_voice_playback(
+                        guild_id,
+                        st.current_track.requester_id,
+                        seek_seconds=st.position_sec,
+                        force_restart=True,
+                    )
             elif action == "seek" and st.current_track:
                 await self.start_or_sync_voice_playback(
                     guild_id,
@@ -1709,6 +1727,18 @@ def build_discord_bot(
                     seek_seconds=st.position_sec,
                     force_restart=True,
                 )
+            elif action == "autoplay":
+                if st.autoplay:
+                    self._schedule_prefetch(guild_id)
+                    if st.current_track and (not vc or not vc.is_connected() or (not vc.is_playing() and not vc.is_paused())):
+                        await self.start_or_sync_voice_playback(guild_id, st.current_track.requester_id)
+            elif action == "mode_247":
+                if st.mode_247 and guild:
+                    await self.ensure_voice_connected(guild_id, st.voice_channel_id, st.host_user_id)
+                elif not st.mode_247 and not st.current_track and vc and vc.is_connected():
+                    human_in_vc = any(not getattr(m, "bot", False) for m in getattr(vc.channel, "members", []))
+                    if not human_in_vc:
+                        await vc.disconnect(force=True)
             await self._notify_web(guild_id)
 
         async def on_message(self, message: discord.Message) -> None:
@@ -1864,9 +1894,9 @@ def build_discord_bot(
                         queue_service.control_playback(
                             guild_id=guild_id,
                             action="stop",
-                            actor_id=str(settings.owner_discord_id),
+                            actor_id="system",
                             is_admin=True,
-                            is_owner=True,
+                            is_owner=False,
                         )
                         await self.apply_web_control(guild_id, "stop")
 
@@ -1879,10 +1909,13 @@ def build_discord_bot(
         is_admin = False
         roles: List[str] = []
         if isinstance(user, discord.Member):
-            is_admin = user.guild_permissions.administrator
+            is_admin = bool(
+                user.guild_permissions.administrator
+                or getattr(user.guild_permissions, "manage_guild", False)
+                or (interaction.guild and interaction.guild.owner_id == user.id)
+            )
             roles = [str(r.id) for r in user.roles]
-        is_owner = str(user.id) == settings.owner_discord_id
-        return str(user.id), user.display_name, roles, is_admin, is_owner
+        return str(user.id), user.display_name, roles, is_admin, is_admin
 
     # =========================================================================
     # Modern Interactive Music Player Embed & Control View
@@ -2771,15 +2804,16 @@ def build_discord_bot(
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, uname, roles, is_admin, is_owner = _member_context(interaction)
         st = queue_service.get_state(guild_id)
+        dj_role_id = bot._get_guild_dj_role_id(guild_id)
         allowed, reason = check_host_lock_permission(
             user_id=uid,
             user_roles=roles,
             is_admin=is_admin,
             is_owner=is_owner,
             session_host_id=st.host_user_id,
-            dj_role_id=settings.dj_role_id,
+            dj_role_id=dj_role_id,
             action="autoplay",
-            has_dj_role=settings.dj_role_id in roles,
+            has_dj_role=dj_role_id in roles,
         )
         if not allowed:
             await interaction.response.send_message(
@@ -2788,9 +2822,21 @@ def build_discord_bot(
             )
             return
         st.autoplay = bool(aktif)
+        try:
+            with db_manager.transaction() as conn:
+                conn.execute(
+                    "UPDATE guild_settings SET autoplay = ?, updated_at = ? WHERE guild_id = ?",
+                    (1 if st.autoplay else 0, datetime.now(timezone.utc).isoformat(), guild_id),
+                )
+        except Exception:
+            pass
         if not st.autoplay:
             queue_service.prefetched_autoplay.pop(guild_id, None)
-        await bot._notify_web(guild_id)
+        elif st.current_track is None:
+            queue_service.advance_track(guild_id)
+            if st.current_track:
+                asyncio.create_task(bot.start_or_sync_voice_playback(guild_id, uid))
+        await bot.apply_web_control(guild_id, "autoplay", st.autoplay)
         emb = _make_embed(
             title=f"📻 Autoplay: {'AKTIF' if aktif else 'NONAKTIF'}",
             description="Bot akan otomatis memutar lagu rekomendasi saat antrean habis." if aktif else "Autoplay dinonaktifkan.",
@@ -2804,15 +2850,16 @@ def build_discord_bot(
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, uname, roles, is_admin, is_owner = _member_context(interaction)
         st = queue_service.get_state(guild_id)
+        dj_role_id = bot._get_guild_dj_role_id(guild_id)
         allowed, reason = check_host_lock_permission(
             user_id=uid,
             user_roles=roles,
             is_admin=is_admin,
             is_owner=is_owner,
             session_host_id=st.host_user_id,
-            dj_role_id=settings.dj_role_id,
+            dj_role_id=dj_role_id,
             action="mode_247",
-            has_dj_role=settings.dj_role_id in roles,
+            has_dj_role=dj_role_id in roles,
         )
         if not allowed:
             await interaction.response.send_message(
@@ -2821,9 +2868,17 @@ def build_discord_bot(
             )
             return
         st.mode_247 = bool(aktif)
+        try:
+            with db_manager.transaction() as conn:
+                conn.execute(
+                    "UPDATE guild_settings SET mode_247 = ?, updated_at = ? WHERE guild_id = ?",
+                    (1 if st.mode_247 else 0, datetime.now(timezone.utc).isoformat(), guild_id),
+                )
+        except Exception:
+            pass
         if aktif:
             await bot.ensure_voice_connected(guild_id, st.voice_channel_id, str(interaction.user.id))
-        await bot._notify_web(guild_id)
+        await bot.apply_web_control(guild_id, "mode_247", st.mode_247)
         emb = _make_embed(
             title=f"🌙 Mode 24/7: {'AKTIF' if aktif else 'NONAKTIF'}",
             description="Bot akan tetap berada di Voice Channel selama 24/7." if aktif else "Mode 24/7 dinonaktifkan.",
@@ -3587,5 +3642,57 @@ def build_discord_bot(
             )
         )
         await interaction.response.send_message(embed=emb, view=view)
+
+    @bot.tree.command(name="admin", description="Panel Admin Server (backup, sync, reset_voice)")
+    async def cmd_admin(interaction: discord.Interaction, aksi: str = "backup") -> None:
+        guild_id = str(interaction.guild_id or settings.main_guild_id)
+        uid, uname, roles, is_admin, _ = _member_context(interaction)
+        if not is_admin:
+            await interaction.response.send_message(
+                embed=_make_embed(
+                    title="🔒 Khusus Admin Server",
+                    description="Perintah `/admin` hanya dapat dijalankan oleh **Admin Server** (Administrator / Manage Server).",
+                    color=0xEF4444,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        act = aksi.strip().lower()
+        if act == "backup":
+            res = await asyncio.to_thread(backup_service.create_consistent_backup, True)
+            emb = _make_embed(
+                title="💾 Backup SQLite Server Selesai",
+                description=(
+                    f"📦 **File:** `{Path(str(res.get('path', 'backup.enc'))).name}`\n"
+                    f"📏 **Ukuran:** `{res.get('size_bytes', 0)} bytes`\n"
+                    f"🔐 **Enkripsi:** `{'Aktif' if res.get('encrypted') else 'Standar'}`"
+                ),
+                color=0x10B981,
+                category_label="Admin Server Hub",
+            )
+            await interaction.response.send_message(embed=emb, ephemeral=True)
+        elif act == "sync":
+            await interaction.response.defer(ephemeral=True)
+            synced = await bot.tree.sync()
+            emb = _make_embed(
+                title="🔄 Slash Commands Disinkronkan",
+                description=f"Berhasil menyinkronkan **{len(synced)}** global slash commands ke Discord.",
+                color=0x38BDF8,
+                category_label="Admin Server Hub",
+            )
+            await interaction.followup.send(embed=emb, ephemeral=True)
+        else:
+            st = queue_service.get_state(guild_id)
+            st.host_user_id = ""
+            st.host_username = ""
+            await bot.apply_web_control(guild_id, "stop")
+            emb = _make_embed(
+                title="🛠️ Sesi Voice & Host Lock Direset",
+                description=f"Sesi pemutaran dan Host Lock di server ini telah direset oleh Admin **{uname}**.",
+                color=0xDC95FF,
+                category_label="Admin Server Hub",
+            )
+            await interaction.response.send_message(embed=emb)
 
     return bot

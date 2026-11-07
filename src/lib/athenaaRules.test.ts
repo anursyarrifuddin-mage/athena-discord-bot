@@ -58,6 +58,28 @@ test('Host Lock system enforces session host, DJ override, and own-item removal'
     action: 'shuffle',
   });
   assert.equal(allowedDj.allowed, true);
+
+  const allowedAutoplay = canControlQueue({
+    userId: 'user-regular',
+    userRoles: [],
+    isAdmin: false,
+    isOwner: false,
+    sessionHostId: 'user-host',
+    djRoleId: 'role-dj',
+    action: 'autoplay',
+  });
+  assert.equal(allowedAutoplay.allowed, true);
+
+  const allowed247 = canControlQueue({
+    userId: 'user-regular',
+    userRoles: [],
+    isAdmin: false,
+    isOwner: false,
+    sessionHostId: 'user-host',
+    djRoleId: 'role-dj',
+    action: 'mode_247',
+  });
+  assert.equal(allowed247.allowed, true);
 });
 
 test('LRCLIB synced lyrics parser and active timestamp finder work accurately', () => {

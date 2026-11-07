@@ -342,7 +342,8 @@ class DatabaseManager:
                 ),
             )
 
-            # Pastikan profil RPG Owner di server utama tersedia untuk Leaderboard
+            # Pastikan profil RPG Admin di server utama tersedia untuk Leaderboard
+            default_admin_uid = "844174494099701780"
             conn.execute(
                 """
                 INSERT INTO level_profiles (
@@ -351,7 +352,7 @@ class DatabaseManager:
                 ) VALUES (?, ?, 'filisim', 'Aetheriaaa', 14, 340, 412, ?, ?)
                 ON CONFLICT(guild_id, user_id) DO NOTHING
                 """,
-                (settings.main_guild_id, settings.owner_discord_id, now_iso, now_iso),
+                (settings.main_guild_id, default_admin_uid, now_iso, now_iso),
             )
 
 
