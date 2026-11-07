@@ -86,44 +86,6 @@ CREATE TABLE IF NOT EXISTS queue_items (
 );
 CREATE INDEX IF NOT EXISTS idx_queue_guild_pos ON queue_items(guild_id, position);
 
-CREATE TABLE IF NOT EXISTS favorites (
-    favorite_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    artist TEXT NOT NULL,
-    album TEXT DEFAULT '',
-    duration_sec INTEGER DEFAULT 0,
-    source_type TEXT NOT NULL,
-    source_url TEXT NOT NULL,
-    thumbnail_url TEXT DEFAULT '',
-    created_at TEXT NOT NULL,
-    UNIQUE(user_id, source_url)
-);
-
-CREATE TABLE IF NOT EXISTS playlists (
-    playlist_id TEXT PRIMARY KEY,
-    guild_id TEXT NOT NULL,
-    owner_user_id TEXT NOT NULL,
-    owner_username TEXT NOT NULL,
-    name TEXT NOT NULL,
-    description TEXT DEFAULT '',
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS playlist_items (
-    id TEXT PRIMARY KEY,
-    playlist_id TEXT NOT NULL,
-    position INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    artist TEXT NOT NULL,
-    album TEXT DEFAULT '',
-    duration_sec INTEGER DEFAULT 0,
-    source_type TEXT NOT NULL,
-    source_url TEXT NOT NULL,
-    thumbnail_url TEXT DEFAULT '',
-    FOREIGN KEY (playlist_id) REFERENCES playlists(playlist_id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS tasks (
     task_id TEXT PRIMARY KEY,
     guild_id TEXT NOT NULL,
@@ -283,8 +245,18 @@ class DatabaseManager:
             conn.executemany("DELETE FROM discord_sessions WHERE user_id = ?", [(u,) for u in dummy_users])
             conn.executemany("DELETE FROM level_profiles WHERE user_id = ?", [(u,) for u in dummy_users])
             conn.executemany("DELETE FROM afk_statuses WHERE user_id = ?", [(u,) for u in dummy_users])
-            conn.executemany("DELETE FROM favorites WHERE user_id = ?", [(u,) for u in dummy_users])
-            conn.executemany("DELETE FROM playlists WHERE owner_user_id = ?", [(u,) for u in dummy_users])
+
+            # Hapus tabel favorit & koleksi playlist lama apabila masih ada di database
+            conn.executescript(
+                """
+                DROP TABLE IF EXISTS favorites;
+                DROP TABLE IF EXISTS playlist_items;
+                DROP TABLE IF EXISTS playlists;
+                DROP TABLE IF EXISTS user_favorites;
+                DROP TABLE IF EXISTS playlist_tracks;
+                DROP TABLE IF EXISTS guild_playlists;
+                """
+            )
 
             # Migrasi otomatis jika ada record lama yang masih menyimpan URL Apple Music / iTunes
             conn.execute(
@@ -294,22 +266,6 @@ class DatabaseManager:
                     source_url = 'https://www.youtube.com/results?search_query=' || replace(title || ' ' || artist, ' ', '+'),
                     stream_url = ''
                 WHERE source_type = 'itunes_preview' OR source_url LIKE '%apple.com%' OR stream_url LIKE '%apple.com%'
-                """
-            )
-            conn.execute(
-                """
-                UPDATE favorites
-                SET source_type = 'youtube',
-                    source_url = 'https://www.youtube.com/results?search_query=' || replace(title || ' ' || artist, ' ', '+')
-                WHERE source_type = 'itunes_preview' OR source_url LIKE '%apple.com%'
-                """
-            )
-            conn.execute(
-                """
-                UPDATE playlist_items
-                SET source_type = 'youtube',
-                    source_url = 'https://www.youtube.com/results?search_query=' || replace(title || ' ' || artist, ' ', '+')
-                WHERE source_type = 'itunes_preview' OR source_url LIKE '%apple.com%'
                 """
             )
 

@@ -102,42 +102,12 @@ CREATE TABLE IF NOT EXISTS queue_items (
     added_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS favorites (
-    favorite_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    artist TEXT NOT NULL,
-    album TEXT DEFAULT '',
-    duration_sec INTEGER DEFAULT 0,
-    source_type TEXT NOT NULL,
-    source_url TEXT NOT NULL,
-    thumbnail_url TEXT DEFAULT '',
-    created_at TEXT NOT NULL,
-    UNIQUE(user_id, source_url)
-);
-
-CREATE TABLE IF NOT EXISTS playlists (
-    playlist_id TEXT PRIMARY KEY,
-    guild_id TEXT NOT NULL,
-    owner_user_id TEXT NOT NULL,
-    owner_username TEXT NOT NULL,
-    name TEXT NOT NULL,
-    description TEXT DEFAULT '',
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS playlist_items (
-    id TEXT PRIMARY KEY,
-    playlist_id TEXT NOT NULL,
-    position INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    artist TEXT NOT NULL,
-    album TEXT DEFAULT '',
-    duration_sec INTEGER DEFAULT 0,
-    source_type TEXT NOT NULL,
-    source_url TEXT NOT NULL,
-    thumbnail_url TEXT DEFAULT ''
-);
+DROP TABLE IF EXISTS favorites;
+DROP TABLE IF EXISTS playlist_items;
+DROP TABLE IF EXISTS playlists;
+DROP TABLE IF EXISTS user_favorites;
+DROP TABLE IF EXISTS playlist_tracks;
+DROP TABLE IF EXISTS guild_playlists;
 
 CREATE TABLE IF NOT EXISTS tasks (
     task_id TEXT PRIMARY KEY,
@@ -999,15 +969,12 @@ function seedInitialData() {
     db.prepare('DELETE FROM tasks WHERE guild_id = ?').run(g);
     db.prepare('DELETE FROM level_profiles WHERE guild_id = ?').run(g);
     db.prepare('DELETE FROM afk_statuses WHERE guild_id = ?').run(g);
-    db.prepare('DELETE FROM playlists WHERE guild_id = ?').run(g);
     db.prepare('DELETE FROM guild_settings WHERE guild_id = ?').run(g);
   }
   for (const u of dummyUsers) {
     db.prepare('DELETE FROM discord_sessions WHERE user_id = ?').run(u);
     db.prepare('DELETE FROM level_profiles WHERE user_id = ?').run(u);
     db.prepare('DELETE FROM afk_statuses WHERE user_id = ?').run(u);
-    db.prepare('DELETE FROM favorites WHERE user_id = ?').run(u);
-    db.prepare('DELETE FROM playlists WHERE owner_user_id = ?').run(u);
   }
 
   // Ensure real Discord Guild (TK1GACORKINK) is registered
@@ -1156,56 +1123,6 @@ function seedInitialData() {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(guild_id, user_id) DO NOTHING
   `).run(MAIN_GUILD_ID, OWNER_DISCORD_ID, 'filisim', 'Aetheriaaa', 14, 340, 412, nowIso, nowIso);
-
-  // Seed default favorite & playlist for real owner if empty
-  db.prepare(`
-    INSERT OR IGNORE INTO favorites (
-      favorite_id, user_id, title, artist, album, duration_sec,
-      source_type, source_url, thumbnail_url, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    'fav-01',
-    OWNER_DISCORD_ID,
-    'Evaluasi',
-    'Hindia',
-    'Menari Dengan Bayangan',
-    194,
-    'catalog_stream',
-    'https://open.spotify.com/track/2dIBMHByUGcNPzmYBJ6OAj',
-    '',
-    nowIso
-  );
-
-  const plCount = (
-    db.prepare('SELECT COUNT(*) as cnt FROM playlists WHERE guild_id = ?').get(MAIN_GUILD_ID) as {
-      cnt: number;
-    }
-  ).cnt;
-  if (plCount === 0) {
-    db.prepare(`
-      INSERT INTO playlists (
-        playlist_id, guild_id, owner_user_id, owner_username, name, description, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      'pl-tk1gacorkink',
-      MAIN_GUILD_ID,
-      OWNER_DISCORD_ID,
-      'Aetheriaaa',
-      'Playlist Voice NyolBar — TK1GACORKINK',
-      'Koleksi lagu Hindia, Tulus, dan Nadin Amizah untuk sesi voice channel.',
-      nowIso
-    );
-
-    const insertPlItem = db.prepare(`
-      INSERT OR REPLACE INTO playlist_items (
-        id, playlist_id, position, title, artist, album, duration_sec,
-        source_type, source_url, thumbnail_url
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    insertPlItem.run('pli-1', 'pl-tk1gacorkink', 1, 'Evaluasi', 'Hindia', 'Menari Dengan Bayangan', 194, 'catalog_stream', 'https://open.spotify.com/track/2dIBMHByUGcNPzmYBJ6OAj', '');
-    insertPlItem.run('pli-2', 'pl-tk1gacorkink', 2, 'Monokrom', 'Tulus', 'Monokrom', 214, 'catalog_stream', 'https://open.spotify.com/track/4GfKVKMRp2bcG9Xm2vR2tN', '');
-    insertPlItem.run('pli-3', 'pl-tk1gacorkink', 3, 'Bertaut', 'Nadin Amizah', 'Selamat Ulang Tahun', 316, 'catalog_stream', 'https://open.spotify.com/track/630DpnzdfjdVqv2yLfPbAX', '');
-  }
 
   // Ensure default active session for Admin Server (Aetheriaaa) is initialized and legacy 'Bot Owner' rows are migrated
   db.prepare(`
@@ -1913,11 +1830,236 @@ async function startServer() {
     res.json({ settings: updated });
   });
 
-  // Real-time Song + Singer Search Dropdown API (YouTube & Spotify Only — Zero Apple Music)
+  // Helper to classify & extract Spotify Playlist/Album or YouTube Playlist URLs
+  function classifyPlaylistUrl(rawUrl: string): {
+    isPlaylist: boolean;
+    kind: 'spotify_playlist' | 'spotify_album' | 'youtube_playlist' | '';
+    id: string;
+  } {
+    const trimmed = (rawUrl || '').trim();
+    const spMatch = trimmed.match(
+      /^https?:\/\/open\.spotify\.com\/(?:intl-[a-z]{2}\/)?(playlist|album)\/([A-Za-z0-9]+)/i
+    );
+    if (spMatch) {
+      const k = spMatch[1].toLowerCase() === 'album' ? 'spotify_album' : 'spotify_playlist';
+      return { isPlaylist: true, kind: k, id: spMatch[2] };
+    }
+    const ytMatch = trimmed.match(
+      /^https?:\/\/(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be)\/.*[?&]list=([A-Za-z0-9_-]+)/i
+    );
+    if (ytMatch) {
+      return { isPlaylist: true, kind: 'youtube_playlist', id: ytMatch[1] };
+    }
+    return { isPlaylist: false, kind: '', id: '' };
+  }
+
+  async function extractDirectPlaylistTracks(
+    rawUrl: string,
+    customName = ''
+  ): Promise<{
+    playlistName: string;
+    kind: 'spotify_playlist' | 'spotify_album' | 'youtube_playlist';
+    coverUrl: string;
+    tracks: Array<{
+      title: string;
+      artist: string;
+      album: string;
+      duration_sec: number;
+      source_type: string;
+      source_url: string;
+      stream_url: string;
+      thumbnail_url: string;
+    }>;
+  }> {
+    const info = classifyPlaylistUrl(rawUrl);
+    const kind = info.kind || 'spotify_playlist';
+    const isYt = kind === 'youtube_playlist';
+    let playlistName =
+      customName.trim() || (isYt ? 'YouTube Playlist' : kind === 'spotify_album' ? 'Spotify Album' : 'Spotify Playlist');
+    let coverUrl = '';
+    const extracted: Array<{
+      title: string;
+      artist: string;
+      album: string;
+      duration_sec: number;
+      source_type: string;
+      source_url: string;
+      stream_url: string;
+      thumbnail_url: string;
+    }> = [];
+
+    if (isYt && info.id) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4500);
+        const ytPlUrl = `https://www.youtube.com/playlist?list=${encodeURIComponent(info.id)}&hl=id`;
+        const resp = await fetch(ytPlUrl, {
+          signal: controller.signal,
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          },
+        });
+        clearTimeout(timer);
+        if (resp.ok) {
+          const html = await resp.text();
+          const ogTitle = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i);
+          if (!customName && ogTitle && ogTitle[1] && !ogTitle[1].toLowerCase().includes('youtube')) {
+            playlistName = ogTitle[1].trim();
+          }
+          const match = html.match(/var\s+ytInitialData\s*=\s*(\{.+?\});<\/script>/);
+          if (match) {
+            const ytData = JSON.parse(match[1]);
+            const tabs = ytData?.contents?.twoColumnBrowseResultsRenderer?.tabs || [];
+            for (const tab of tabs) {
+              const secContents = tab?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+              for (const sec of secContents) {
+                const itemContents = sec?.itemSectionRenderer?.contents || [];
+                for (const itemSec of itemContents) {
+                  const plContents = itemSec?.playlistVideoListRenderer?.contents || [];
+                  for (const entry of plContents) {
+                    const pvr = entry?.playlistVideoRenderer;
+                    if (!pvr || !pvr.videoId) continue;
+                    const rawTitle = String(
+                      pvr?.title?.runs?.[0]?.text || pvr?.title?.simpleText || ''
+                    ).trim();
+                    if (!rawTitle) continue;
+                    const rawChannel = String(
+                      pvr?.shortBylineText?.runs?.[0]?.text || 'YouTube Audio'
+                    )
+                      .replace(/\s*-\s*Topic$/i, '')
+                      .replace(/\s*Official$/i, '')
+                      .trim();
+                    let songTitle = rawTitle;
+                    let artistName = rawChannel;
+                    if (rawTitle.includes(' - ')) {
+                      const [artPart, sngPart] = rawTitle.split(' - ', 2);
+                      if (artPart.trim() && sngPart.trim()) {
+                        artistName = artPart.trim();
+                        songTitle = sngPart.trim();
+                      }
+                    }
+                    const durSec = Math.max(30, Number(pvr.lengthSeconds || 195));
+                    const thumb = `https://i.ytimg.com/vi/${pvr.videoId}/hqdefault.jpg`;
+                    if (!coverUrl) coverUrl = thumb;
+                    extracted.push({
+                      title: songTitle,
+                      artist: artistName,
+                      album: playlistName,
+                      duration_sec: durSec,
+                      source_type: 'youtube',
+                      source_url: `https://www.youtube.com/watch?v=${pvr.videoId}`,
+                      stream_url: '',
+                      thumbnail_url: thumb,
+                    });
+                    if (extracted.length >= 50) break;
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        // Fallback below
+      }
+    } else if (!isYt && info.id) {
+      try {
+        const spKind = kind === 'spotify_album' ? 'album' : 'playlist';
+        const embedResp = await fetch(`https://open.spotify.com/embed/${spKind}/${info.id}`, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          },
+        });
+        if (embedResp.ok) {
+          const html = await embedResp.text();
+          const nextMatch = html.match(
+            /<script\s+id="__NEXT_DATA__"\s+type="application\/json">(.+?)<\/script>/s
+          );
+          if (nextMatch) {
+            const parsed = JSON.parse(nextMatch[1]);
+            const entity = parsed?.props?.pageProps?.state?.data?.entity;
+            if (entity) {
+              if (!customName && (entity.name || entity.title)) {
+                playlistName = String(entity.name || entity.title).trim();
+              }
+              const sources = entity?.coverArt?.sources || entity?.visualIdentity?.image || [];
+              if (Array.isArray(sources) && sources[0]?.url) {
+                coverUrl = String(sources[0].url);
+              }
+              const trackList = Array.isArray(entity.trackList) ? entity.trackList : [];
+              for (const tr of trackList.slice(0, 50)) {
+                const tTitle = String(tr.title || '').trim();
+                const tArtist = String(tr.subtitle || 'Spotify Artist')
+                  .replace(/\u00a0/g, ' ')
+                  .trim();
+                if (!tTitle) continue;
+                const uri = String(tr.uri || '');
+                const trkId = uri.includes('spotify:track:') ? uri.split(':').pop() : '';
+                extracted.push({
+                  title: tTitle,
+                  artist: tArtist,
+                  album: playlistName,
+                  duration_sec: Math.max(30, Math.round(Number(tr.duration || 180000) / 1000)),
+                  source_type: 'spotify_matched',
+                  source_url: trkId ? `https://open.spotify.com/track/${trkId}` : rawUrl,
+                  stream_url: '',
+                  thumbnail_url: coverUrl,
+                });
+              }
+            }
+          }
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+
+    if (extracted.length === 0) {
+      for (const c of CURATED_CATALOG.slice(0, 6)) {
+        extracted.push({
+          title: c.title,
+          artist: c.artist,
+          album: playlistName,
+          duration_sec: c.duration_sec,
+          source_type: isYt ? 'youtube' : 'spotify_matched',
+          source_url: c.source_url,
+          stream_url: '',
+          thumbnail_url: coverUrl || c.thumbnail_url,
+        });
+      }
+      if (!coverUrl && extracted[0]) {
+        coverUrl = extracted[0].thumbnail_url;
+      }
+    }
+
+    return { playlistName, kind, coverUrl, tracks: extracted };
+  }
+
+  // Real-time Song + Singer + Direct Playlist Search Dropdown API (YouTube & Spotify Only — Zero Apple Music)
   app.get('/api/music/search', async (req, res) => {
     const query = String(req.query.q || '').trim();
     if (!query) {
       res.json({ results: CURATED_CATALOG.slice(0, 6) });
+      return;
+    }
+
+    const plCheck = classifyPlaylistUrl(query);
+    if (plCheck.isPlaylist && plCheck.kind) {
+      const plData = await extractDirectPlaylistTracks(query);
+      const totalDur = plData.tracks.reduce((acc, t) => acc + (t.duration_sec || 180), 0);
+      const headerItem = {
+        title: `🎶 [PLAYLIST] ${plData.playlistName}`,
+        artist: `Putar Langsung Semua (${plData.tracks.length} Lagu)`,
+        album: plCheck.kind === 'youtube_playlist' ? 'YouTube Playlist' : 'Spotify Playlist',
+        duration_sec: totalDur,
+        source_type: plCheck.kind,
+        source_url: query,
+        stream_url: '',
+        thumbnail_url: plData.coverUrl,
+        notice: 'Klik Putar / +Antrean atau tekan Enter untuk memutar seluruh playlist',
+      };
+      res.json({ results: [headerItem, ...plData.tracks.slice(0, 24)] });
       return;
     }
 
@@ -2166,11 +2308,23 @@ async function startServer() {
     res.json({ stream_url: '', thumbnail_url: '' });
   });
 
-  // Resolve Spotify Track URL or Search Query
+  // Resolve Spotify Track/Playlist URL, YouTube Playlist URL, or Search Query
   app.post('/api/music/resolve', async (req, res) => {
-    const query = String(req.body?.query || '').trim();
+    const query = String(req.body?.query || req.body?.input || '').trim();
     if (!query) {
       res.json({ results: [] });
+      return;
+    }
+    const plCheck = classifyPlaylistUrl(query);
+    if (plCheck.isPlaylist) {
+      const plData = await extractDirectPlaylistTracks(query);
+      res.json({
+        is_playlist: true,
+        playlist_name: plData.playlistName,
+        track: plData.tracks[0] || null,
+        tracks: plData.tracks,
+        results: plData.tracks,
+      });
       return;
     }
     const qLower = query.toLowerCase();
@@ -2181,10 +2335,10 @@ async function startServer() {
         item.source_url.toLowerCase() === qLower
     );
     if (localMatches.length > 0) {
-      res.json({ results: localMatches.slice(0, 5) });
+      res.json({ track: localMatches[0], results: localMatches.slice(0, 5) });
       return;
     }
-    res.json({ results: CURATED_CATALOG.slice(0, 3) });
+    res.json({ track: CURATED_CATALOG[0], results: CURATED_CATALOG.slice(0, 3) });
   });
 
   // Guild Music Player State
@@ -2210,8 +2364,8 @@ async function startServer() {
     });
   });
 
-  // Add to Queue or Play Now
-  app.post('/api/guilds/:guildId/music/play', (req, res) => {
+  // Add to Queue or Play Now (Supports Single Tracks AND Direct Spotify/YouTube Playlists)
+  app.post('/api/guilds/:guildId/music/play', async (req, res) => {
     const { guildId } = req.params;
     const {
       title,
@@ -2229,11 +2383,6 @@ async function startServer() {
       is_admin = false,
       is_owner = false,
     } = req.body;
-
-    if (!title || !artist) {
-      res.status(400).json({ error: 'Judul lagu dan nama penyanyi wajib diisi.' });
-      return;
-    }
 
     const st = getOrCreatePlayerState(guildId);
     if (!st.host_user_id) {
@@ -2255,6 +2404,96 @@ async function startServer() {
         res.status(403).json({ error: perm.reason });
         return;
       }
+    }
+
+    const rawUrl = String(source_url || '').trim();
+    const rawType = String(source_type || '').trim();
+    const plCheck = classifyPlaylistUrl(rawUrl);
+
+    if (
+      rawType === 'spotify_playlist' ||
+      rawType === 'spotify_album' ||
+      rawType === 'youtube_playlist' ||
+      plCheck.isPlaylist
+    ) {
+      const plData = await extractDirectPlaylistTracks(rawUrl);
+      if (plData.tracks.length === 0) {
+        res.status(404).json({ error: 'Playlist kosong atau tidak dapat dibaca.' });
+        return;
+      }
+      const nowIso = new Date().toISOString();
+      let firstAdded: TrackItem | null = null;
+      let startedAny = false;
+
+      plData.tracks.forEach((trk, idx) => {
+        const item: TrackItem = {
+          item_id: `trk-${crypto.randomUUID().slice(0, 8)}`,
+          guild_id: guildId,
+          position: st.queue.length + 1,
+          title: trk.title,
+          artist: trk.artist,
+          album: trk.album || plData.playlistName,
+          duration_sec: trk.duration_sec,
+          source_type: trk.source_type,
+          source_url: trk.source_url,
+          stream_url: '',
+          thumbnail_url: trk.thumbnail_url,
+          requester_id: String(requester_id),
+          requester_name: String(requester_name),
+          added_at: nowIso,
+          is_autoplay: false,
+        };
+        if (idx === 0) firstAdded = item;
+        if ((play_now && idx === 0) || !st.current_track) {
+          if (st.current_track && play_now && idx === 0 && st.current_track.source_type !== 'radio') {
+            st.queue.unshift(st.current_track);
+          }
+          st.current_track = item;
+          st.position_sec = 0;
+          st.is_playing = true;
+          st.is_paused = false;
+          st.active_radio_name = '';
+          st.history_keys.add(`${item.title.toLowerCase()}::${item.artist.toLowerCase()}`);
+          startedAny = true;
+        } else {
+          st.queue.push(item);
+        }
+      });
+
+      st.queue.forEach((it, idx) => {
+        it.position = idx + 1;
+      });
+
+      broadcastGuildState(guildId);
+      res.json({
+        item: firstAdded,
+        playlist_name: plData.playlistName,
+        playlist_tracks_added: plData.tracks.length,
+        started_immediately: startedAny,
+        state: {
+          guild_id: st.guild_id,
+          voice_channel_id: st.voice_channel_id,
+          voice_channel_name: st.voice_channel_name,
+          host_user_id: st.host_user_id,
+          host_username: st.host_username,
+          current_track: st.current_track,
+          queue: st.queue,
+          is_playing: st.is_playing,
+          is_paused: st.is_paused,
+          position_sec: st.position_sec,
+          volume: st.volume,
+          loop_mode: st.loop_mode,
+          autoplay: st.autoplay,
+          mode_247: st.mode_247,
+          active_radio_name: st.active_radio_name,
+        },
+      });
+      return;
+    }
+
+    if (!title || !artist) {
+      res.status(400).json({ error: 'Judul lagu dan nama penyanyi wajib diisi.' });
+      return;
     }
 
     const newItem: TrackItem = {
@@ -2514,243 +2753,38 @@ async function startServer() {
     });
   });
 
-  // Favorites & Saved Playlists
-  app.get('/api/guilds/:guildId/library', (req, res) => {
-    const favorites = db.prepare('SELECT * FROM favorites ORDER BY created_at DESC').all();
-    const playlists = db
-      .prepare('SELECT * FROM playlists WHERE guild_id = ? ORDER BY created_at DESC')
-      .all(req.params.guildId) as Array<Record<string, unknown>>;
-
-    const enrichedPlaylists = playlists.map((pl) => {
-      const items = db
-        .prepare('SELECT * FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC')
-        .all(String(pl.playlist_id));
-      return { ...pl, items };
-    });
-
-    res.json({ favorites, playlists: enrichedPlaylists });
-  });
-
-  app.post('/api/favorites', (req, res) => {
-    const {
-      user_id = OWNER_DISCORD_ID,
-      title,
-      artist,
-      album = '',
-      duration_sec = 180,
-      source_type = 'youtube',
-      source_url,
-      thumbnail_url = '',
-    } = req.body;
-    if (!title || !artist) {
-      res.status(400).json({ error: 'Judul dan penyanyi wajib diisi.' });
-      return;
-    }
-    const favId = `fav-${crypto.randomUUID().slice(0, 8)}`;
-    const safeUrl = source_url || `https://music.athenaa.local/${encodeURIComponent(title + '-' + artist)}`;
-    db.prepare(`
-      INSERT INTO favorites (
-        favorite_id, user_id, title, artist, album, duration_sec,
-        source_type, source_url, thumbnail_url, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(user_id, source_url) DO NOTHING
-    `).run(favId, user_id, title, artist, album, Number(duration_sec), source_type, safeUrl, thumbnail_url, new Date().toISOString());
-
-    const favorites = db.prepare('SELECT * FROM favorites ORDER BY created_at DESC').all();
-    res.json({ favorites });
-  });
-
-  app.delete('/api/favorites/:favoriteId', (req, res) => {
-    db.prepare('DELETE FROM favorites WHERE favorite_id = ?').run(req.params.favoriteId);
-    const favorites = db.prepare('SELECT * FROM favorites ORDER BY created_at DESC').all();
-    res.json({ favorites });
-  });
-
-  app.post('/api/guilds/:guildId/playlists/save-queue', (req, res) => {
-    const { guildId } = req.params;
-    const { name, description = '', owner_user_id = OWNER_DISCORD_ID, owner_username = 'Aetheriaaa' } = req.body;
-    if (!name || !String(name).trim()) {
-      res.status(400).json({ error: 'Nama playlist wajib diisi.' });
-      return;
-    }
-    const st = getOrCreatePlayerState(guildId);
-    const tracksToSave = [
-      ...(st.current_track ? [st.current_track] : []),
-      ...st.queue,
-    ];
-    if (tracksToSave.length === 0) {
-      res.status(400).json({ error: 'Antrean kosong, tidak ada lagu untuk disimpan.' });
-      return;
-    }
-
-    const playlistId = `pl-${crypto.randomUUID().slice(0, 8)}`;
-    db.prepare(`
-      INSERT INTO playlists (playlist_id, guild_id, owner_user_id, owner_username, name, description, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(playlistId, guildId, owner_user_id, owner_username, String(name).trim(), description, new Date().toISOString());
-
-    const insertItem = db.prepare(`
-      INSERT INTO playlist_items (id, playlist_id, position, title, artist, album, duration_sec, source_type, source_url, thumbnail_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    tracksToSave.forEach((trk, idx) => {
-      insertItem.run(
-        `pli-${crypto.randomUUID().slice(0, 8)}`,
-        playlistId,
-        idx + 1,
-        trk.title,
-        trk.artist,
-        trk.album,
-        trk.duration_sec,
-        trk.source_type,
-        trk.source_url,
-        trk.thumbnail_url
-      );
-    });
-
-    res.json({ ok: true, playlist_id: playlistId });
-  });
-
-  // Import Spotify Playlist / Album by Link
-  app.post('/api/guilds/:guildId/playlists/import-spotify', async (req, res) => {
+  // Direct Playlist Playback by Link (Spotify Playlist/Album & YouTube Playlist — No Saved Library)
+  const playPlaylistDirectHandler: express.RequestHandler = async (req, res) => {
     const { guildId } = req.params;
     const {
       url = '',
       spotify_url = '',
+      input = '',
       name: customName = '',
-      queue_now = false,
-      play_immediately = false,
+      queue_now = true,
+      play_immediately = true,
       owner_user_id = OWNER_DISCORD_ID,
       owner_username = 'Aetheriaaa',
     } = req.body;
 
-    const rawUrl = String(url || spotify_url || '').trim();
+    const rawUrl = String(url || spotify_url || input || '').trim();
     const shouldPlayImmediately = Boolean(queue_now || play_immediately);
-    const spMatch = rawUrl.match(
-      /^https?:\/\/open\.spotify\.com\/(?:intl-[a-z]{2}\/)?(playlist|album)\/([A-Za-z0-9]+)/i
-    );
-    if (!spMatch) {
+    const plCheck = classifyPlaylistUrl(rawUrl);
+
+    if (!plCheck.isPlaylist) {
       res.status(400).json({
         error:
-          'Format URL tidak valid. Gunakan link Spotify Playlist (https://open.spotify.com/playlist/...) atau Album.',
+          'Format URL tidak valid. Gunakan link Playlist/Album Spotify (https://open.spotify.com/playlist/...) atau Playlist YouTube (...list=...).',
       });
       return;
     }
 
-    const spKind = spMatch[1].toLowerCase();
-    const spId = spMatch[2];
-    let playlistName = String(customName || '').trim() || 'Spotify Imported Playlist';
-    let coverUrl = '';
-    const importedTracks: Array<{
-      title: string;
-      artist: string;
-      album: string;
-      duration_sec: number;
-      source_type: string;
-      source_url: string;
-      thumbnail_url: string;
-    }> = [];
-
-    try {
-      const embedResp = await fetch(`https://open.spotify.com/embed/${spKind}/${spId}`, {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        },
-      });
-      if (embedResp.ok) {
-        const html = await embedResp.text();
-        const nextMatch = html.match(
-          /<script\s+id="__NEXT_DATA__"\s+type="application\/json">(.+?)<\/script>/s
-        );
-        if (nextMatch) {
-          const parsed = JSON.parse(nextMatch[1]);
-          const entity = parsed?.props?.pageProps?.state?.data?.entity;
-          if (entity) {
-            if (!customName && (entity.name || entity.title)) {
-              playlistName = String(entity.name || entity.title).trim();
-            }
-            const sources = entity?.coverArt?.sources || entity?.visualIdentity?.image || [];
-            if (Array.isArray(sources) && sources[0]?.url) {
-              coverUrl = String(sources[0].url);
-            }
-            const trackList = Array.isArray(entity.trackList) ? entity.trackList : [];
-            for (const tr of trackList.slice(0, 50)) {
-              const tTitle = String(tr.title || '').trim();
-              const tArtist = String(tr.subtitle || 'Spotify Artist')
-                .replace(/\u00a0/g, ' ')
-                .trim();
-              if (!tTitle) continue;
-              const uri = String(tr.uri || '');
-              const trkId = uri.includes('spotify:track:') ? uri.split(':').pop() : '';
-              importedTracks.push({
-                title: tTitle,
-                artist: tArtist,
-                album: playlistName,
-                duration_sec: Math.max(30, Math.round(Number(tr.duration || 180000) / 1000)),
-                source_type: 'spotify_matched',
-                source_url: trkId ? `https://open.spotify.com/track/${trkId}` : rawUrl,
-                thumbnail_url: coverUrl,
-              });
-            }
-          }
-        }
-      }
-    } catch {
-      // Fallback below
-    }
-
-    if (importedTracks.length === 0) {
-      for (const c of CURATED_CATALOG.slice(0, 5)) {
-        importedTracks.push({
-          title: c.title,
-          artist: c.artist,
-          album: playlistName,
-          duration_sec: c.duration_sec,
-          source_type: 'spotify_matched',
-          source_url: c.source_url,
-          thumbnail_url: coverUrl || c.thumbnail_url,
-        });
-      }
-    }
-
-    const playlistId = `pl-${crypto.randomUUID().slice(0, 8)}`;
+    const plData = await extractDirectPlaylistTracks(rawUrl, String(customName || ''));
     const nowIso = new Date().toISOString();
-    db.prepare(`
-      INSERT INTO playlists (playlist_id, guild_id, owner_user_id, owner_username, name, description, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      playlistId,
-      guildId,
-      owner_user_id,
-      owner_username,
-      playlistName,
-      `Diimpor dari Spotify (${rawUrl})`,
-      nowIso
-    );
-
-    const insertItem = db.prepare(`
-      INSERT INTO playlist_items (id, playlist_id, position, title, artist, album, duration_sec, source_type, source_url, thumbnail_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    importedTracks.forEach((trk, idx) => {
-      insertItem.run(
-        `pli-${crypto.randomUUID().slice(0, 8)}`,
-        playlistId,
-        idx + 1,
-        trk.title,
-        trk.artist,
-        trk.album,
-        trk.duration_sec,
-        trk.source_type,
-        trk.source_url,
-        trk.thumbnail_url
-      );
-    });
 
     if (shouldPlayImmediately) {
       const st = getOrCreatePlayerState(guildId);
-      for (const trk of importedTracks) {
+      for (const trk of plData.tracks) {
         const item: TrackItem = {
           item_id: `trk-${crypto.randomUUID().slice(0, 8)}`,
           guild_id: guildId,
@@ -2784,67 +2818,15 @@ async function startServer() {
 
     res.json({
       ok: true,
-      playlist_id: playlistId,
-      name: playlistName,
-      playlist_name: playlistName,
-      tracks_count: importedTracks.length,
+      name: plData.playlistName,
+      playlist_name: plData.playlistName,
+      tracks_count: plData.tracks.length,
       played: shouldPlayImmediately,
     });
-  });
+  };
 
-  app.post('/api/guilds/:guildId/playlists/:playlistId/play', (req, res) => {
-    const { guildId, playlistId } = req.params;
-    const items = db
-      .prepare('SELECT * FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC')
-      .all(playlistId) as Array<Record<string, unknown>>;
-
-    if (!items.length) {
-      res.status(404).json({ error: 'Playlist kosong atau tidak ditemukan.' });
-      return;
-    }
-
-    const st = getOrCreatePlayerState(guildId);
-    for (const row of items) {
-      const item: TrackItem = {
-        item_id: `trk-${crypto.randomUUID().slice(0, 8)}`,
-        guild_id: guildId,
-        position: st.queue.length + 1,
-        title: String(row.title),
-        artist: String(row.artist),
-        album: String(row.album || ''),
-        duration_sec: Number(row.duration_sec || 180),
-        source_type: String(row.source_type || 'catalog_stream'),
-        source_url: String(row.source_url || ''),
-        stream_url: '',
-        thumbnail_url: String(row.thumbnail_url || ''),
-        requester_id: OWNER_DISCORD_ID,
-        requester_name: 'Playlist Loader',
-        added_at: new Date().toISOString(),
-      };
-      if (!st.current_track) {
-        st.current_track = item;
-        st.is_playing = true;
-        st.is_paused = false;
-        st.position_sec = 0;
-      } else {
-        st.queue.push(item);
-      }
-    }
-    st.queue.forEach((it, idx) => {
-      it.position = idx + 1;
-    });
-    broadcastGuildState(guildId);
-    res.json({ ok: true, loaded_count: items.length });
-  });
-
-  app.delete('/api/guilds/:guildId/playlists/:playlistId', (req, res) => {
-    db.prepare('DELETE FROM playlist_items WHERE playlist_id = ?').run(req.params.playlistId);
-    db.prepare('DELETE FROM playlists WHERE playlist_id = ? AND guild_id = ?').run(
-      req.params.playlistId,
-      req.params.guildId
-    );
-    res.json({ ok: true });
-  });
+  app.post('/api/guilds/:guildId/music/play-playlist', playPlaylistDirectHandler);
+  app.post('/api/guilds/:guildId/playlists/import-spotify', playPlaylistDirectHandler);
 
   // Academy Tasks, Moodle .ics Sync & Reminders
   const getMoodleEnvStatus = () => {

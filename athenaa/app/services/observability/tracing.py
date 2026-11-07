@@ -474,52 +474,55 @@ def trace_http_request(method: str, url: str, status_code: Optional[int] = None)
             raise
 
 
-# FastAPI middleware for automatic request tracing
+# FastAPI pure ASGI middleware for automatic HTTP request tracing (safe for WebSockets & FileResponse)
 def create_tracing_middleware(service_name: str = "athenaa"):
-    """Create FastAPI middleware for automatic request tracing."""
-    from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.requests import Request
-    from starlette.responses import Response
-    
-    class TracingMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next: Callable) -> Response:
-            # Extract trace context from headers
-            parent_ctx = extract_trace_context(dict(request.headers))
-            
-            # Start span for request
-            span_name = f"http.{request.method.lower()}"
-            attrs = {
-                "http.method": request.method,
-                "http.url": str(request.url),
-                "http.scheme": request.url.scheme,
-                "http.host": request.url.hostname,
-                "http.target": request.url.path,
+    """Create pure ASGI middleware for automatic HTTP request tracing."""
+
+    class TracingMiddleware:
+        def __init__(self, app: Any):
+            self.app = app
+
+        async def __call__(self, scope: Dict[str, Any], receive: Callable, send: Callable) -> None:
+            if scope.get("type") != "http":
+                await self.app(scope, receive, send)
+                return
+
+            raw_headers = {
+                k.decode("latin1").lower(): v.decode("latin1")
+                for k, v in (scope.get("headers") or [])
             }
-            
+            parent_ctx = extract_trace_context(raw_headers)
+            method = str(scope.get("method") or "GET")
+            path = str(scope.get("path") or "/")
+            span_name = f"http.{method.lower()}"
+            attrs = {
+                "http.method": method,
+                "http.scheme": str(scope.get("scheme") or "http"),
+                "http.target": path,
+            }
+
+            status_code_holder = [200]
+
+            async def send_wrapper(message: Dict[str, Any]) -> None:
+                if message.get("type") == "http.response.start":
+                    status_code_holder[0] = int(message.get("status") or 200)
+                await send(message)
+
             with start_span(span_name, "server", attrs, parent_ctx) as span:
                 start = time.perf_counter()
                 try:
-                    response = await call_next(request)
+                    await self.app(scope, receive, send_wrapper)
                     duration = (time.perf_counter() - start) * 1000
-                    
                     if span:
-                        set_span_attribute("http.status_code", response.status_code)
+                        code = status_code_holder[0]
+                        set_span_attribute("http.status_code", code)
                         set_span_attribute("http.duration_ms", duration)
-                        set_span_attribute("http.response_size", len(response.body) if hasattr(response, 'body') else 0)
-                        set_span_status("ok" if response.status_code < 400 else "error")
-                    
-                    # Add trace headers to response
-                    if span:
-                        trace_ctx = get_trace_context()
-                        for k, v in trace_ctx.items():
-                            response.headers[k] = v
-                    
-                    return response
+                        set_span_status("ok" if code < 400 else "error")
                 except Exception as e:
                     if span:
                         record_exception(e)
                     raise
-    
+
     return TracingMiddleware
 
 

@@ -60,6 +60,7 @@ from app.services.music_service import (
     VERIFIED_RADIO_STATIONS,
     classify_music_input,
     extract_spotify_playlist_tracks,
+    extract_youtube_playlist_tracks,
     resolve_browser_preview_stream,
     resolve_spotify_link,
     search_songs_with_singer,
@@ -1003,10 +1004,14 @@ def create_fastapi_app():
         if cleaned_q:
             try:
                 kind, _ = classify_music_input(cleaned_q)
-                if kind in ("spotify_playlist", "spotify_album"):
+                if kind in ("spotify_playlist", "spotify_album", "youtube_playlist"):
                     pl_data = await asyncio.to_thread(extract_spotify_playlist_tracks, cleaned_q, 50)
                     pl_tracks = pl_data.get("tracks") or []
-                    pl_name = str(pl_data.get("playlist_name") or "Spotify Playlist")
+                    is_yt_pl = kind == "youtube_playlist"
+                    pl_name = str(
+                        pl_data.get("playlist_name")
+                        or ("YouTube Playlist" if is_yt_pl else "Spotify Playlist")
+                    )
                     pl_thumb = str(
                         pl_data.get("thumbnail_url")
                         or (pl_tracks[0].thumbnail_url if pl_tracks else "")
@@ -1016,13 +1021,13 @@ def create_fastapi_app():
                         {
                             "title": f"🎶 [PLAYLIST] {pl_name}",
                             "artist": f"Putar Langsung Semua ({len(pl_tracks)} Lagu)",
-                            "album": "Spotify Playlist",
+                            "album": "YouTube Playlist" if is_yt_pl else "Spotify Playlist",
                             "duration_sec": total_dur,
                             "source_type": kind,
                             "source_url": cleaned_q,
                             "stream_url": "",
                             "thumbnail_url": pl_thumb,
-                            "notice": "Klik Putar / +Antrean untuk memutar seluruh playlist",
+                            "notice": "Klik Putar / +Antrean atau tekan Enter untuk memutar seluruh playlist",
                         }
                     ]
                     for tr in pl_tracks[:24]:
@@ -1046,13 +1051,13 @@ def create_fastapi_app():
     @app.post("/api/music/resolve")
     async def api_resolve_music(request: Request):
         body = await request.json()
-        raw_input = str(body.get("input", "")).strip()
+        raw_input = str(body.get("input") or body.get("query") or "").strip()
         kind, _ = classify_music_input(raw_input)
-        if kind in ("spotify_playlist", "spotify_album"):
+        if kind in ("spotify_playlist", "spotify_album", "youtube_playlist"):
             pl_data = await asyncio.to_thread(extract_spotify_playlist_tracks, raw_input, 50)
             tracks = pl_data.get("tracks") or []
             if not tracks:
-                raise HTTPException(status_code=404, detail="Lagu dalam playlist Spotify tidak ditemukan.")
+                raise HTTPException(status_code=404, detail="Lagu dalam playlist tidak ditemukan.")
             return {
                 "is_playlist": True,
                 "playlist_name": pl_data.get("playlist_name"),
@@ -1127,12 +1132,19 @@ def create_fastapi_app():
             except Exception:
                 input_kind = ""
 
-            if raw_source_type in ("spotify_playlist", "spotify_album") or input_kind in ("spotify_playlist", "spotify_album"):
+            if raw_source_type in ("spotify_playlist", "spotify_album", "youtube_playlist") or input_kind in (
+                "spotify_playlist",
+                "spotify_album",
+                "youtube_playlist",
+            ):
                 pl_data = await asyncio.to_thread(extract_spotify_playlist_tracks, raw_source_url, 50)
                 pl_tracks = pl_data.get("tracks") or []
                 if not pl_tracks:
-                    return JSONResponse(status_code=404, content={"error": "Playlist Spotify kosong atau tidak terbaca."})
+                    return JSONResponse(status_code=404, content={"error": "Playlist kosong atau tidak terbaca."})
 
+                is_yt_pl = raw_source_type == "youtube_playlist" or input_kind == "youtube_playlist"
+                default_album = "YouTube Playlist" if is_yt_pl else "Spotify Playlist"
+                default_src_type = "youtube" if is_yt_pl else "spotify_matched"
                 first_item = None
                 started_any = False
                 for idx, tr in enumerate(pl_tracks):
@@ -1140,9 +1152,9 @@ def create_fastapi_app():
                         guild_id=guild_id,
                         title=tr.title,
                         artist=tr.artist,
-                        album=tr.album or str(pl_data.get("playlist_name") or "Spotify Playlist"),
+                        album=tr.album or str(pl_data.get("playlist_name") or default_album),
                         duration_sec=int(tr.duration_sec or 180),
-                        source_type="spotify_matched",
+                        source_type=getattr(tr, "source_type", "") or default_src_type,
                         source_url=tr.source_url,
                         stream_url="",
                         thumbnail_url=tr.thumbnail_url,
@@ -1160,6 +1172,7 @@ def create_fastapi_app():
                     if started:
                         started_any = True
 
+                await _broadcast_guild_state(guild_id)
                 return {
                     "item": asdict(first_item) if first_item else {},
                     "playlist_tracks_added": len(pl_tracks),
@@ -1218,6 +1231,12 @@ def create_fastapi_app():
                     dj_role_id=settings.dj_role_id,
                     has_dj_role=has_dj_role,
                 )
+                live_bot = getattr(app.state, "bot", None)
+                if live_bot is not None and hasattr(live_bot, "apply_web_control"):
+                    try:
+                        asyncio.create_task(live_bot.apply_web_control(guild_id, "play_item", item_id))
+                    except Exception:
+                        pass
             elif action == "remove_item":
                 queue_service.remove_item(
                     guild_id=guild_id,
@@ -1284,234 +1303,68 @@ def create_fastapi_app():
             return JSONResponse(status_code=403, content={"error": str(exc)})
 
     # =========================================================================
-    # Favorites & Playlists Endpoints (Full SQLite Persistence)
+    # Direct Playlist Playback Endpoint (Spotify Playlist/Album & YouTube Playlist)
+    # Tanpa penyimpanan koleksi playlist atau favorit
     # =========================================================================
-    def _load_favorites(user_id: str = "") -> List[Dict[str, Any]]:
-        with db_manager.transaction() as conn:
-            if user_id:
-                rows = conn.execute(
-                    "SELECT * FROM user_favorites WHERE user_id = ? ORDER BY added_at DESC",
-                    (user_id,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM user_favorites ORDER BY added_at DESC LIMIT 100"
-                ).fetchall()
-        return [dict(r) for r in rows]
-
-    def _load_playlists(guild_id: str) -> List[Dict[str, Any]]:
-        with db_manager.transaction() as conn:
-            pls = conn.execute(
-                "SELECT * FROM guild_playlists WHERE guild_id = ? ORDER BY created_at DESC",
-                (guild_id,),
-            ).fetchall()
-            result = []
-            for p in pls:
-                pd = dict(p)
-                trks = conn.execute(
-                    "SELECT * FROM playlist_tracks WHERE playlist_id = ? ORDER BY position ASC",
-                    (pd["playlist_id"],),
-                ).fetchall()
-                pd["tracks"] = [dict(t) for t in trks]
-                result.append(pd)
-        return result
-
-    @app.get("/api/guilds/{guild_id}/library")
-    async def api_guild_library(guild_id: str, request: Request):
-        sess = _extract_session(request)
-        uid = sess["user"]["id"] if sess else str(request.query_params.get("user_id", ""))
-        return {
-            "favorites": _load_favorites(uid),
-            "playlists": _load_playlists(guild_id),
-        }
-
-    @app.get("/api/favorites")
-    async def api_get_favorites(request: Request, user_id: str = Query("")):
-        sess = _extract_session(request)
-        uid = user_id or (sess["user"]["id"] if sess else "")
-        return {"favorites": _load_favorites(uid)}
-
-    @app.post("/api/favorites")
-    @app.post("/api/guilds/{guild_id}/favorites")
-    async def api_add_favorite(request: Request, guild_id: str = ""):
-        body = await request.json()
-        sess = _extract_session(request)
-        uid = sess["user"]["id"] if sess else str(body.get("user_id") or "844174494099701780")
-        title = str(body.get("title") or "").strip()
-        artist = str(body.get("artist") or "Unknown").strip()
-        if not title:
-            return JSONResponse(status_code=400, content={"error": "Judul lagu wajib diisi."})
-        fav_id = f"fav-{uuid.uuid4().hex[:10]}"
-        now_iso = _utc_now()
-        with db_manager.transaction() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO user_favorites (
-                    favorite_id, user_id, title, artist, album, duration_sec,
-                    source_type, source_url, stream_url, thumbnail_url, added_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    fav_id,
-                    uid,
-                    title,
-                    artist,
-                    str(body.get("album") or ""),
-                    int(body.get("duration_sec") or 200),
-                    str(body.get("source_type") or "spotify_matched"),
-                    str(body.get("source_url") or ""),
-                    str(body.get("stream_url") or ""),
-                    str(body.get("thumbnail_url") or ""),
-                    now_iso,
-                ),
-            )
-        return {"ok": True, "favorite_id": fav_id, "favorites": _load_favorites(uid)}
-
-    @app.delete("/api/favorites/{favorite_id}")
-    @app.delete("/api/guilds/{guild_id}/favorites/{favorite_id}")
-    async def api_delete_favorite(favorite_id: str, guild_id: str = ""):
-        with db_manager.transaction() as conn:
-            conn.execute("DELETE FROM user_favorites WHERE favorite_id = ?", (favorite_id,))
-        return {"ok": True}
-
-    @app.get("/api/guilds/{guild_id}/playlists")
-    async def api_get_playlists(guild_id: str):
-        return {"playlists": _load_playlists(guild_id)}
-
-    @app.post("/api/guilds/{guild_id}/playlists/save-queue")
-    async def api_save_queue_playlist(guild_id: str, request: Request):
-        body = await request.json()
-        sess = _extract_session(request)
-        owner_id = sess["user"]["id"] if sess else str(body.get("owner_user_id") or "844174494099701780")
-        owner_name = sess["user"]["name"] if sess else str(body.get("owner_username") or "Admin Server")
-        name = str(body.get("name") or "Playlist Antrean Server").strip()
-        st = queue_service.get_state(guild_id)
-        tracks_to_save = []
-        if st.current_track:
-            tracks_to_save.append(st.current_track)
-        tracks_to_save.extend(st.queue)
-        if not tracks_to_save:
-            return JSONResponse(status_code=400, content={"error": "Tidak ada lagu yang sedang diputar atau di antrean."})
-
-        pl_id = f"pl-{uuid.uuid4().hex[:10]}"
-        now_iso = _utc_now()
-        with db_manager.transaction() as conn:
-            conn.execute(
-                """
-                INSERT INTO guild_playlists (playlist_id, guild_id, name, owner_user_id, owner_username, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (pl_id, guild_id, name, owner_id, owner_name, now_iso),
-            )
-            for idx, tr in enumerate(tracks_to_save, start=1):
-                conn.execute(
-                    """
-                    INSERT INTO playlist_tracks (
-                        track_id, playlist_id, position, title, artist, album,
-                        duration_sec, source_type, source_url, stream_url, thumbnail_url
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        f"plt-{uuid.uuid4().hex[:10]}",
-                        pl_id,
-                        idx,
-                        tr.title,
-                        tr.artist,
-                        tr.album,
-                        tr.duration_sec,
-                        tr.source_type,
-                        tr.source_url,
-                        tr.stream_url,
-                        tr.thumbnail_url,
-                    ),
-                )
-        return {"ok": True, "playlist_id": pl_id, "playlists": _load_playlists(guild_id)}
-
-    @app.post("/api/guilds/{guild_id}/playlists/{playlist_id}/play")
-    async def api_play_saved_playlist(guild_id: str, playlist_id: str, request: Request):
-        sess = _extract_session(request)
-        req_id = sess["user"]["id"] if sess else "844174494099701780"
-        req_name = sess["user"]["name"] if sess else "Member Server"
-        is_adm = sess["user"]["isAdmin"] if sess else True
-        has_dj = sess["user"]["hasDjRole"] if sess else True
-        with db_manager.transaction() as conn:
-            trks = conn.execute(
-                "SELECT * FROM playlist_tracks WHERE playlist_id = ? ORDER BY position ASC",
-                (playlist_id,),
-            ).fetchall()
-        if not trks:
-            return JSONResponse(status_code=404, content={"error": "Playlist kosong atau tidak ditemukan."})
-        for idx, row in enumerate(trks):
-            r = dict(row)
-            queue_service.add_track(
-                guild_id=guild_id,
-                title=r["title"],
-                artist=r["artist"],
-                album=r.get("album", ""),
-                duration_sec=int(r.get("duration_sec") or 200),
-                source_type=r.get("source_type", "spotify_matched"),
-                source_url=r.get("source_url", ""),
-                stream_url=r.get("stream_url", ""),
-                thumbnail_url=r.get("thumbnail_url", ""),
-                requester_id=req_id,
-                requester_name=req_name,
-                play_now=(idx == 0),
-                is_admin=is_adm,
-                is_owner=is_adm,
-                has_dj_role=has_dj,
-            )
-        await _broadcast_guild_state(guild_id)
-        return {"ok": True, "state": _serialize_music_state(guild_id)}
-
-    @app.delete("/api/guilds/{guild_id}/playlists/{playlist_id}")
-    async def api_delete_saved_playlist(guild_id: str, playlist_id: str):
-        with db_manager.transaction() as conn:
-            conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?", (playlist_id,))
-            conn.execute("DELETE FROM guild_playlists WHERE playlist_id = ? AND guild_id = ?", (playlist_id, guild_id))
-        return {"ok": True, "playlists": _load_playlists(guild_id)}
-
+    @app.post("/api/guilds/{guild_id}/music/play-playlist")
     @app.post("/api/guilds/{guild_id}/playlists/import-spotify")
-    async def api_import_spotify_playlist(guild_id: str, request: Request):
+    async def api_play_playlist_direct(guild_id: str, request: Request):
         body = await request.json()
         sess = _extract_session(request)
         owner_id = sess["user"]["id"] if sess else str(body.get("owner_user_id") or "844174494099701780")
         owner_name = sess["user"]["name"] if sess else str(body.get("owner_username") or "Member Server")
-        spotify_url = str(body.get("spotify_url") or body.get("url") or "").strip()
+        is_adm = sess["user"]["isAdmin"] if sess else True
+        has_dj = sess["user"]["hasDjRole"] if sess else True
+        playlist_url = str(body.get("spotify_url") or body.get("url") or body.get("input") or "").strip()
+        custom_name = str(body.get("name") or "").strip()
+        queue_now = bool(body.get("queue_now", body.get("play_immediately", True)))
 
-        if not spotify_url:
-            return JSONResponse(status_code=400, content={"error": "Masukkan link Playlist atau Album Spotify terlebih dahulu."})
+        if not playlist_url:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Masukkan link Playlist YouTube atau Spotify terlebih dahulu."},
+            )
 
         try:
-            pl_data = await asyncio.to_thread(extract_spotify_playlist_tracks, spotify_url, 50)
+            pl_data = await asyncio.to_thread(extract_spotify_playlist_tracks, playlist_url, 50)
         except Exception as exc:
-            return JSONResponse(status_code=400, content={"error": f"Gagal membaca playlist Spotify: {exc}"})
+            return JSONResponse(status_code=400, content={"error": f"Gagal membaca playlist: {exc}"})
 
         tracks = pl_data.get("tracks") or []
         if not tracks:
-            return JSONResponse(status_code=404, content={"error": "Tidak ditemukan lagu di dalam playlist Spotify tersebut."})
+            return JSONResponse(status_code=404, content={"error": "Tidak ditemukan lagu di dalam playlist tersebut."})
 
-        playlist_name = str(pl_data.get("playlist_name") or "Spotify Playlist")
-        for tr in tracks:
-            queue_service.add_track(
-                guild_id=guild_id,
-                title=tr.title,
-                artist=tr.artist,
-                album=playlist_name,
-                duration_sec=tr.duration_sec,
-                source_type="spotify_matched",
-                source_url=tr.source_url,
-                stream_url="",
-                thumbnail_url=tr.thumbnail_url,
-                requester_id=owner_id,
-                requester_name=owner_name,
-                play_now=False,
-            )
+        playlist_name = custom_name or str(pl_data.get("playlist_name") or "Playlist")
+
+        if queue_now:
+            st = queue_service.get_state(guild_id)
+            was_empty = st.current_track is None
+            for idx, tr in enumerate(tracks):
+                queue_service.add_track(
+                    guild_id=guild_id,
+                    title=tr.title,
+                    artist=tr.artist,
+                    album=getattr(tr, "album", "") or playlist_name,
+                    duration_sec=int(getattr(tr, "duration_sec", 200) or 200),
+                    source_type=getattr(tr, "source_type", "") or "spotify_matched",
+                    source_url=getattr(tr, "source_url", "") or playlist_url,
+                    stream_url=getattr(tr, "stream_url", "") or "",
+                    thumbnail_url=getattr(tr, "thumbnail_url", "") or "",
+                    requester_id=owner_id,
+                    requester_name=owner_name,
+                    play_now=(was_empty and idx == 0),
+                    is_admin=is_adm,
+                    is_owner=is_adm,
+                    has_dj_role=has_dj,
+                )
+            await _broadcast_guild_state(guild_id)
 
         return {
             "ok": True,
+            "name": playlist_name,
             "playlist_name": playlist_name,
             "tracks_count": len(tracks),
-            "played": True,
+            "played": queue_now,
             "state": _serialize_music_state(guild_id),
         }
 

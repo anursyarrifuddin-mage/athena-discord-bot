@@ -21,7 +21,6 @@ import {
   Circle,
   Download,
   Music,
-  Heart,
   ShieldCheck,
   Mic2,
   Clock3,
@@ -55,7 +54,6 @@ type NavTab =
   | 'overview'
   | 'player'
   | 'queue'
-  | 'library'
   | 'academy'
   | 'modules'
   | 'rpg'
@@ -523,7 +521,13 @@ export default function App() {
   ]);
 
   const handlePlayOrQueueTrack = useCallback(async (track: TrackItem, playNow: boolean) => {
-    if (playNow) {
+    const isPlaylist =
+      track.source_type === 'spotify_playlist' ||
+      track.source_type === 'spotify_album' ||
+      track.source_type === 'youtube_playlist' ||
+      track.title.startsWith('🎶 [PLAYLIST]');
+
+    if (playNow && !isPlaylist) {
       audioEngine.forceStop();
       setMusicState((prev) => ({
         ...prev,
@@ -579,11 +583,17 @@ export default function App() {
     } else {
       fetchMusicState(selectedGuildId);
     }
-    showNotice(
-      data.started_immediately
-        ? `Sedang memutar: ${track.title} — ${track.artist}`
-        : `Ditambahkan ke antrean (#${data.item?.position ?? ''}): ${track.title} — ${track.artist}`
-    );
+    if (data.playlist_tracks_added) {
+      showNotice(
+        `Playlist (${data.playlist_tracks_added} lagu) langsung diputar & ditambahkan ke antrean!`
+      );
+    } else {
+      showNotice(
+        data.started_immediately
+          ? `Sedang memutar: ${track.title} — ${track.artist}`
+          : `Ditambahkan ke antrean (#${data.item?.position ?? ''}): ${track.title} — ${track.artist}`
+      );
+    }
   }, [activeActor, selectedGuildId, sessionToken, fetchMusicState, showNotice]);
 
   const handlePlayerControl = useCallback(async (action: string, value?: unknown, itemId?: string) => {
@@ -731,30 +741,6 @@ export default function App() {
     }
   }, [activeActor, selectedGuildId, sessionToken, fetchMusicState, showNotice]);
 
-  const handleAddFavorite = useCallback(async (track: TrackItem) => {
-    const resp = await fetch('/api/favorites', {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-      },
-      body: JSON.stringify({
-        user_id: activeActor.id,
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-        duration_sec: track.duration_sec,
-        source_type: track.source_type,
-        source_url: track.source_url,
-        thumbnail_url: track.thumbnail_url,
-      }),
-    });
-    if (resp.ok) {
-      showNotice(`"${track.title} — ${track.artist}" disimpan ke Lagu Favorit.`);
-    }
-  }, [activeActor.id, sessionToken, showNotice]);
-
   const currentGuildSettings = guilds.find((g) => g.guild_id === selectedGuildId) || null;
   const pendingTasks = tasks.filter((t) => !t.is_completed);
 
@@ -786,13 +772,6 @@ export default function App() {
       subtitle: `${musicState.queue.length} lagu dalam antrean`,
       group: 'music',
       icon: <ListOrdered className="w-5 h-5" />,
-    },
-    {
-      id: 'library',
-      label: 'Favorit & Playlist',
-      subtitle: 'Koleksi lagu & playlist',
-      group: 'music',
-      icon: <Library className="w-5 h-5" />,
     },
     {
       id: 'academy',
@@ -941,7 +920,6 @@ export default function App() {
           <SearchDropdownBar
             onPlayNow={(track) => handlePlayOrQueueTrack(track, true)}
             onAddToQueue={(track) => handlePlayOrQueueTrack(track, false)}
-            onAddFavorite={handleAddFavorite}
           />
         </div>
 
@@ -1345,7 +1323,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Card 6: Admin Server & Python Bot OR Member Library Card */}
+                    {/* Card 6: Admin Server & Python Bot OR Member Modules Card */}
                     {isServerAdmin ? (
                       <div
                         onClick={() => setActiveTab('codebase')}
@@ -1367,19 +1345,19 @@ export default function App() {
                       </div>
                     ) : (
                       <div
-                        onClick={() => setActiveTab('library')}
+                        onClick={() => setActiveTab('modules')}
                         className="h-14 bg-white/5 hover:bg-white/15 rounded-md overflow-hidden flex items-center justify-between pr-3 cursor-pointer transition-colors group"
                       >
                         <div className="flex items-center gap-3 min-w-0">
                           <div className="w-14 h-14 bg-purple-900/40 flex items-center justify-center shrink-0">
-                            <Heart className="w-6 h-6 text-[#DC95FF]" />
+                            <FileArchive className="w-6 h-6 text-[#DC95FF]" />
                           </div>
                           <div className="min-w-0">
                             <div className="text-xs font-bold text-white truncate">
-                              Favorit & Playlist Pribadi
+                              Modul & Lampiran PDF ({attachments.length})
                             </div>
                             <div className="text-[11px] text-[#B3B3B3] truncate">
-                              Koleksi Lagu & Playlist Tersimpan
+                              Unduh Materi & Modul Kuliah Tervalidasi
                             </div>
                           </div>
                         </div>
@@ -1616,7 +1594,7 @@ export default function App() {
               </div>
             )}
 
-            {(activeTab === 'player' || activeTab === 'queue' || activeTab === 'library') && (
+            {(activeTab === 'player' || activeTab === 'queue') && (
               <MusicAndLyricsView
                 subTab={activeTab}
                 guildId={selectedGuildId}
@@ -1625,7 +1603,6 @@ export default function App() {
                 activeActor={activeActor}
                 onPlayTrack={handlePlayOrQueueTrack}
                 onControl={handlePlayerControl}
-                onAddFavorite={handleAddFavorite}
                 onRefreshMusicState={() => fetchMusicState(selectedGuildId)}
                 onNotify={showNotice}
               />
@@ -1702,14 +1679,6 @@ export default function App() {
                   {currentTrack.artist}
                 </p>
               </div>
-              <button
-                type="button"
-                aria-label={`Simpan ke favorit ${currentTrack.title}`}
-                onClick={() => handleAddFavorite(currentTrack)}
-                className="p-1.5 rounded-full text-[#B3B3B3] hover:text-[#DC95FF] transition-colors shrink-0"
-              >
-                <Heart className="w-5 h-5" />
-              </button>
             </div>
           ) : (
             <div className="text-xs text-[#B3B3B3]">Belum ada lagu yang sedang diputar.</div>
@@ -1852,7 +1821,6 @@ export default function App() {
           );
         }}
         onControl={handlePlayerControl}
-        onAddFavorite={handleAddFavorite}
       />
 
       {/* Per-Server Role Switcher & Discord OAuth2 Login Modal */}

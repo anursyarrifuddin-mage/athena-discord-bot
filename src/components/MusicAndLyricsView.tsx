@@ -9,9 +9,6 @@ import {
   Radio,
   Mic2,
   ShieldAlert,
-  Heart,
-  FolderPlus,
-  ListMusic,
   Music,
   Clock3,
 } from 'lucide-react';
@@ -25,14 +22,13 @@ import { formatDuration } from './SearchDropdownBar';
 import { getActiveLyricIndex } from '../lib/athenaaRules';
 
 interface MusicAndLyricsViewProps {
-  subTab: 'player' | 'queue' | 'library';
+  subTab: 'player' | 'queue';
   guildId: string;
   sessionToken?: string;
   musicState: GuildMusicState;
   activeActor: ActiveActorProfile;
   onPlayTrack: (track: TrackItem, playNow: boolean) => void;
   onControl: (action: string, value?: unknown, itemId?: string) => void;
-  onAddFavorite: (track: TrackItem) => void;
   onRefreshMusicState?: () => void;
   onNotify: (msg: string, isError?: boolean) => void;
 }
@@ -45,7 +41,6 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
   activeActor,
   onPlayTrack,
   onControl,
-  onAddFavorite,
   onRefreshMusicState,
   onNotify,
 }) => {
@@ -54,14 +49,7 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
   const [customRadioUrl, setCustomRadioUrl] = useState('');
   const [customRadioName, setCustomRadioName] = useState('');
   const [spotifyInputUrl, setSpotifyInputUrl] = useState('');
-
-  const [favorites, setFavorites] = useState<Array<Record<string, unknown>>>([]);
-  const [playlists, setPlaylists] = useState<Array<Record<string, unknown>>>([]);
-  const [newPlaylistName, setNewPlaylistName] = useState('');
-  const [newPlaylistDesc, setNewPlaylistDesc] = useState('');
-  const [spotifyPlaylistUrl, setSpotifyPlaylistUrl] = useState('');
-  const [spotifyPlaylistCustomName, setSpotifyPlaylistCustomName] = useState('');
-  const [importingSpotify, setImportingSpotify] = useState(false);
+  const [loadingPlaylist, setLoadingPlaylist] = useState(false);
 
   const currentTrack = musicState.current_track;
 
@@ -93,25 +81,6 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
     };
   }, [currentTrack?.title, currentTrack?.artist]);
 
-  const loadLibrary = async () => {
-    try {
-      const resp = await fetch(`/api/guilds/${guildId}/library`);
-      if (resp.ok) {
-        const data = await resp.json();
-        setFavorites(data.favorites || []);
-        setPlaylists(data.playlists || []);
-      }
-    } catch {
-      // Ignore
-    }
-  };
-
-  useEffect(() => {
-    if (subTab === 'library') {
-      loadLibrary();
-    }
-  }, [subTab, guildId]);
-
   const lyricsContainerRef = useRef<HTMLDivElement | null>(null);
   const lyricLineRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
@@ -140,12 +109,16 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
     const raw = spotifyInputUrl.trim();
     if (!raw) return;
 
-    // If user pasted a Spotify Playlist or Album link, import and queue all tracks
-    if (
-      raw.includes('open.spotify.com/playlist/') ||
-      raw.includes('open.spotify.com/album/')
-    ) {
-      setImportingSpotify(true);
+    const rawLower = raw.toLowerCase();
+    const isPlaylistUrl =
+      rawLower.includes('open.spotify.com/playlist/') ||
+      rawLower.includes('open.spotify.com/album/') ||
+      ((rawLower.includes('youtube.com/') || rawLower.includes('youtu.be/')) &&
+        rawLower.includes('list='));
+
+    // If user pasted a Spotify Playlist/Album or YouTube Playlist link, play & queue all tracks directly
+    if (isPlaylistUrl) {
+      setLoadingPlaylist(true);
       try {
         const resp = await fetch(`/api/guilds/${guildId}/playlists/import-spotify`, {
           method: 'POST',
@@ -163,19 +136,18 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
         });
         const data = await resp.json();
         if (!resp.ok) {
-          onNotify(data.error || 'Gagal mengimpor Playlist Spotify.', true);
+          onNotify(data.error || 'Gagal memutar Playlist.', true);
           return;
         }
         setSpotifyInputUrl('');
-        loadLibrary();
         if (onRefreshMusicState) onRefreshMusicState();
         onNotify(
-          `Playlist Spotify "${data.name}" (${data.tracks_count} lagu) berhasil diimpor & dimasukkan ke antrean YouTube/Spotify!`
+          `Playlist "${data.name}" (${data.tracks_count} lagu) langsung diputar & dimasukkan ke antrean!`
         );
       } catch {
-        onNotify('Gagal menghubungi server untuk impor Playlist Spotify.', true);
+        onNotify('Gagal menghubungi server untuk memutar Playlist.', true);
       } finally {
-        setImportingSpotify(false);
+        setLoadingPlaylist(false);
       }
       return;
     }
@@ -189,12 +161,14 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
       });
       if (resolveResp.ok) {
         const resolved = await resolveResp.json();
-        const first = (resolved.results || [])[0];
+        const first = resolved.track || (resolved.results || [])[0];
         if (first) {
           onPlayTrack(
             {
               ...first,
-              source_type: raw.includes('spotify.com') ? 'spotify_matched' : first.source_type || 'youtube',
+              source_type: raw.includes('spotify.com')
+                ? 'spotify_matched'
+                : first.source_type || 'youtube',
               source_url: first.source_url || raw,
             },
             false
@@ -220,7 +194,9 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
         onPlayTrack(
           {
             ...first,
-            source_type: raw.includes('spotify.com') ? 'spotify_matched' : first.source_type || 'youtube',
+            source_type: raw.includes('spotify.com')
+              ? 'spotify_matched'
+              : first.source_type || 'youtube',
             source_url: first.source_url || raw,
           },
           false
@@ -234,55 +210,6 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
       } else {
         onNotify('Lagu tidak ditemukan di YouTube maupun Spotify.', true);
       }
-    }
-  };
-
-  const handleImportSpotifyPlaylist = async (queueNow: boolean) => {
-    const raw = spotifyPlaylistUrl.trim();
-    if (!raw || !raw.includes('spotify.com/')) {
-      onNotify(
-        'Masukkan link Playlist atau Album Spotify yang valid (mis. https://open.spotify.com/playlist/...)',
-        true
-      );
-      return;
-    }
-    setImportingSpotify(true);
-    try {
-      const resp = await fetch(`/api/guilds/${guildId}/playlists/import-spotify`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-        },
-        body: JSON.stringify({
-          url: raw,
-          name: spotifyPlaylistCustomName.trim(),
-          owner_user_id: activeActor.id,
-          owner_username: activeActor.name,
-          queue_now: queueNow,
-        }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) {
-        onNotify(data.error || 'Gagal mengimpor Playlist Spotify.', true);
-        return;
-      }
-      setSpotifyPlaylistUrl('');
-      setSpotifyPlaylistCustomName('');
-      await loadLibrary();
-      if (queueNow && onRefreshMusicState) {
-        onRefreshMusicState();
-      }
-      onNotify(
-        queueNow
-          ? `Playlist Spotify "${data.name}" (${data.tracks_count} lagu) berhasil disimpan & langsung diputar di Discord Voice!`
-          : `Playlist Spotify "${data.name}" (${data.tracks_count} lagu) berhasil diimpor ke Koleksi Playlist Server!`
-      );
-    } catch {
-      onNotify('Terjadi kesalahan jaringan saat mengimpor Playlist Spotify.', true);
-    } finally {
-      setImportingSpotify(false);
     }
   };
 
@@ -312,33 +239,6 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
     );
     setCustomRadioUrl('');
     setCustomRadioName('');
-  };
-
-  const handleSaveQueueAsPlaylist = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newPlaylistName.trim()) {
-      onNotify('Masukkan nama playlist terlebih dahulu.', true);
-      return;
-    }
-    const resp = await fetch(`/api/guilds/${guildId}/playlists/save-queue`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: newPlaylistName.trim(),
-        description: newPlaylistDesc.trim(),
-        owner_user_id: activeActor.id,
-        owner_username: activeActor.name,
-      }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) {
-      onNotify(data.error || 'Gagal menyimpan playlist', true);
-      return;
-    }
-    setNewPlaylistName('');
-    setNewPlaylistDesc('');
-    onNotify('Antrean saat ini berhasil disimpan ke database sebagai Playlist!');
-    loadLibrary();
   };
 
   if (subTab === 'player') {
@@ -477,15 +377,6 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
                       <Radio className="w-3.5 h-3.5" />
                       24/7 {musicState.mode_247 ? 'ON' : 'OFF'}
                     </button>
-
-                    <button
-                      type="button"
-                      onClick={() => onAddFavorite(currentTrack)}
-                      className="flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-white text-xs font-semibold transition-colors cursor-pointer"
-                    >
-                      <Heart className="w-4 h-4 text-[#DC95FF]" />
-                      Simpan Favorit
-                    </button>
                   </div>
                 </div>
               ) : (
@@ -519,21 +410,22 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
 
             <form onSubmit={handleResolveSpotifyOrUrl} className="mt-6 pt-5 border-t border-white/10 space-y-2">
               <label className="block text-xs font-medium text-[#B3B3B3]">
-                Impor Tautan Spotify (Track / Album / Playlist) atau YouTube URL
+                Putar Langsung Link Playlist / Track (Spotify &amp; YouTube)
               </label>
               <div className="flex gap-2">
                 <input
                   type="text"
-                  placeholder="https://open.spotify.com/track/... atau judul lagu"
+                  placeholder="https://open.spotify.com/playlist/... atau YouTube Playlist URL"
                   value={spotifyInputUrl}
                   onChange={(e) => setSpotifyInputUrl(e.target.value)}
                   className="flex-1 bg-[#242424] border border-white/10 rounded-full px-4 py-2 text-xs text-white placeholder:text-[#B3B3B3] focus:outline-none focus:border-white/40"
                 />
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-full bg-white hover:bg-white/90 text-xs font-bold text-black whitespace-nowrap"
+                  disabled={loadingPlaylist}
+                  className="px-4 py-2 rounded-full bg-white hover:bg-white/90 disabled:opacity-50 text-xs font-bold text-black whitespace-nowrap cursor-pointer"
                 >
-                  Cocokkan & Antrekan
+                  {loadingPlaylist ? 'Memuat Playlist...' : 'Putar / Antrekan'}
                 </button>
               </div>
             </form>
@@ -618,7 +510,7 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
             <div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 <Radio className="w-4 h-4 text-[#DC95FF]" />
-                Stasiun Radio Internet & Live Stream
+                Stasiun Radio Internet &amp; Live Stream
               </h3>
               <p className="text-xs text-[#B3B3B3] mt-0.5">
                 Pilih stasiun radio terverifikasi atau masukkan URL stream khusus (dilindungi validasi anti-SSRF).
@@ -696,405 +588,179 @@ const MusicAndLyricsViewComponent: React.FC<MusicAndLyricsViewProps> = ({
     );
   }
 
-  if (subTab === 'queue') {
-    return (
-      <div className="space-y-6">
-        {/* Host Lock System Banner */}
-        <div className="bg-[#181818] border border-white/5 rounded-xl p-5">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div>
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <ShieldAlert className="w-4 h-4 text-[#DC95FF]" />
-                Host Lock System & Izin Kontrol Antrean
-              </h2>
-              <p className="text-xs text-[#B3B3B3] mt-1">
-                Session Host saat ini:{' '}
-                <strong className="text-white">
-                  {musicState.host_username || 'Tidak ada (Sesi Terbuka)'}
-                </strong>
-                . Pengguna biasa hanya dapat menghapus lagunya sendiri dan tidak dapat melewati/menghentikan lagu pengguna lain.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-[#242424] border border-white/10 shrink-0">
-              <span className="w-2 h-2 rounded-full bg-[#DC95FF]" />
-              <span className="text-xs text-[#B3B3B3]">Sesi Login:</span>
-              <span className="text-xs font-bold text-white">{activeActor.name}</span>
-              <span className="text-[11px] text-[#DC95FF]">({activeActor.roleLabel})</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Spotify Precision Tracklist Queue */}
-        <div className="bg-[#181818] border border-white/5 rounded-xl overflow-hidden">
-          <div className="px-6 py-4 border-b border-white/10 flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h3 className="text-base font-bold text-white">
-                Daftar Antrean Server ({musicState.queue.length} Lagu)
-              </h3>
-              <p className="text-xs text-[#B3B3B3] mt-0.5">
-                Setiap item antrean memiliki UUID unik sehingga lagu yang sama dapat ditambahkan beberapa kali.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => onControl('autoplay', !musicState.autoplay)}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors cursor-pointer ${
-                  musicState.autoplay
-                    ? 'bg-[#DC95FF]/20 text-[#DC95FF] border border-[#DC95FF]/40'
-                    : 'bg-[#282828] hover:bg-[#3E3E3E] text-[#B3B3B3] hover:text-white'
-                }`}
-              >
-                Autoplay {musicState.autoplay ? 'ON' : 'OFF'}
-              </button>
-              <button
-                type="button"
-                onClick={() => onControl('mode_247', !musicState.mode_247)}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors cursor-pointer ${
-                  musicState.mode_247
-                    ? 'bg-[#DC95FF]/20 text-[#DC95FF] border border-[#DC95FF]/40'
-                    : 'bg-[#282828] hover:bg-[#3E3E3E] text-[#B3B3B3] hover:text-white'
-                }`}
-              >
-                <Radio className="w-3.5 h-3.5" />
-                Mode 24/7 {musicState.mode_247 ? 'ON' : 'OFF'}
-              </button>
-              <button
-                type="button"
-                onClick={() => onControl('shuffle')}
-                disabled={musicState.queue.length < 2}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#282828] hover:bg-[#3E3E3E] disabled:opacity-40 text-xs font-semibold text-white cursor-pointer"
-              >
-                <Shuffle className="w-3.5 h-3.5" />
-                Acak Antrean
-              </button>
-              <button
-                type="button"
-                onClick={() => onControl('clear')}
-                disabled={musicState.queue.length === 0}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-rose-950/60 hover:bg-rose-900/70 border border-rose-800/50 disabled:opacity-40 text-xs font-semibold text-rose-200 cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                Bersihkan Antrean
-              </button>
-            </div>
-          </div>
-
-          {musicState.queue.length === 0 ? (
-            <div className="p-10 text-center text-sm text-[#B3B3B3]">
-              Antrean kosong. Jika Autoplay aktif, bot akan otomatis memilih lagu berikutnya saat lagu saat ini selesai.
-            </div>
-          ) : (
-            <div className="p-3">
-              <div className="grid grid-cols-[36px_minmax(0,2fr)_minmax(0,1.1fr)_100px_68px_210px] items-center gap-3 px-3 py-2 border-b border-white/10 text-xs font-medium text-[#B3B3B3]">
-                <span>#</span>
-                <span>Judul & Penyanyi</span>
-                <span>Diminta Oleh</span>
-                <span>ID Unik</span>
-                <span className="flex justify-end">
-                  <Clock3 className="w-3.5 h-3.5" />
-                </span>
-                <span className="text-right">Kontrol</span>
-              </div>
-
-              <div className="divide-y divide-white/5 mt-1">
-                {musicState.queue.map((item, idx) => (
-                  <div
-                    key={item.item_id || idx}
-                    className="grid grid-cols-[36px_minmax(0,2fr)_minmax(0,1.1fr)_100px_68px_210px] items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 transition-colors"
-                  >
-                    <span className="font-mono tabular-nums text-xs text-[#B3B3B3]">
-                      {idx + 1}
-                    </span>
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-10 h-10 rounded bg-[#282828] flex items-center justify-center shrink-0 overflow-hidden">
-                        {item.thumbnail_url ? (
-                          <img
-                            src={item.thumbnail_url}
-                            alt={item.title}
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <Music className="w-4 h-4 text-[#DC95FF]" />
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="font-semibold text-white text-sm truncate">
-                          {item.title}
-                        </div>
-                        <div className="text-xs text-[#B3B3B3] truncate">
-                          {item.artist} {item.album ? `· ${item.album}` : ''}
-                        </div>
-                      </div>
-                    </div>
-                    <span className="text-xs text-[#B3B3B3] truncate">{item.requester_name}</span>
-                    <span className="font-mono text-xs text-white/45 truncate">{item.item_id}</span>
-                    <span className="font-mono tabular-nums text-xs text-[#B3B3B3] text-right">
-                      {formatDuration(item.duration_sec)}
-                    </span>
-                    <div className="flex items-center justify-end gap-1.5">
-                      <button
-                        type="button"
-                        aria-label={`Putar sekarang ${item.title}`}
-                        onClick={() => onControl('play_item', undefined, item.item_id)}
-                        className="px-2.5 py-1 rounded-full bg-gradient-to-r from-[#8C56D4] to-[#DC95FF] hover:from-[#DC95FF] hover:to-[#FFBEFB] text-black font-bold text-xs inline-flex items-center gap-1 transition-all"
-                        title="Putar Sekarang"
-                      >
-                        <Play className="w-3 h-3 fill-current" />
-                        Play
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Pindahkan ${item.title} ke urutan teratas`}
-                        onClick={() => onControl('move_to_top', undefined, item.item_id)}
-                        className="px-2 py-1 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-xs text-white inline-flex items-center gap-1"
-                        title="Move to Top"
-                      >
-                        <ArrowUp className="w-3 h-3" />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Hapus ${item.title} dari antrean`}
-                        onClick={() => onControl('remove_item', undefined, item.item_id)}
-                        className="px-2.5 py-1 rounded-full bg-[#282828] hover:bg-rose-900/70 text-xs text-[#B3B3B3] hover:text-rose-200 inline-flex items-center gap-1"
-                        title="Hapus dari Antrean"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-      <div className="lg:col-span-6 bg-[#181818] border border-white/5 rounded-xl p-6 space-y-4">
-        <div className="flex items-center justify-between border-b border-white/10 pb-3">
+    <div className="space-y-6">
+      {/* Host Lock System Banner */}
+      <div className="bg-[#181818] border border-white/5 rounded-xl p-5">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
             <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Heart className="w-4 h-4 text-[#DC95FF]" />
-              Lagu yang Disukai ({favorites.length})
+              <ShieldAlert className="w-4 h-4 text-[#DC95FF]" />
+              Host Lock System &amp; Izin Kontrol Antrean
             </h2>
-            <p className="text-xs text-[#B3B3B3] mt-0.5">
-              Daftar lagu favorit yang tersimpan pada akun Discord Anda.
+            <p className="text-xs text-[#B3B3B3] mt-1">
+              Session Host saat ini:{' '}
+              <strong className="text-white">
+                {musicState.host_username || 'Tidak ada (Sesi Terbuka)'}
+              </strong>
+              . Pengguna biasa hanya dapat menghapus lagunya sendiri dan tidak dapat melewati/menghentikan lagu pengguna lain.
             </p>
           </div>
-        </div>
 
-        {favorites.length === 0 ? (
-          <div className="py-8 text-center text-sm text-[#B3B3B3]">
-            Belum ada lagu favorit. Klik ikon hati pada hasil pencarian atau pemutar musik.
+          <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-[#242424] border border-white/10 shrink-0">
+            <span className="w-2 h-2 rounded-full bg-[#DC95FF]" />
+            <span className="text-xs text-[#B3B3B3]">Sesi Login:</span>
+            <span className="text-xs font-bold text-white">{activeActor.name}</span>
+            <span className="text-[11px] text-[#DC95FF]">({activeActor.roleLabel})</span>
           </div>
-        ) : (
-          <div className="divide-y divide-white/5">
-            {favorites.map((fav) => (
-              <div key={String(fav.favorite_id)} className="py-3 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-white truncate">
-                    {String(fav.title)}
-                  </div>
-                  <div className="text-xs text-[#B3B3B3] truncate">
-                    {String(fav.artist)} ·{' '}
-                    <span className="font-mono tabular-nums">
-                      {formatDuration(Number(fav.duration_sec || 180))}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onPlayTrack(
-                        {
-                          title: String(fav.title),
-                          artist: String(fav.artist),
-                          album: String(fav.album || ''),
-                          duration_sec: Number(fav.duration_sec || 180),
-                          source_type: String(
-                            fav.source_type === 'itunes_preview' || !fav.source_type
-                              ? 'youtube'
-                              : fav.source_type
-                          ),
-                          source_url: String(fav.source_url || ''),
-                          stream_url: '',
-                          thumbnail_url: String(fav.thumbnail_url || ''),
-                        },
-                        false
-                      )
-                    }
-                    className="px-3 py-1 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs"
-                  >
-                    + Antrean
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await fetch(`/api/favorites/${fav.favorite_id}`, { method: 'DELETE' });
-                      loadLibrary();
-                    }}
-                    className="p-1.5 rounded-full bg-[#282828] hover:bg-rose-900/60 text-[#B3B3B3] hover:text-rose-200"
-                    aria-label={`Hapus favorit ${String(fav.title)}`}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        </div>
       </div>
 
-      <div className="lg:col-span-6 bg-[#181818] border border-white/5 rounded-xl p-6 space-y-4">
-        <div className="border-b border-white/10 pb-3">
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
-            <ListMusic className="w-4 h-4 text-[#DC95FF]" />
-            Playlist Tersimpan Server ({playlists.length})
-          </h2>
-          <p className="text-xs text-[#B3B3B3] mt-0.5">
-            Impor langsung menggunakan link Playlist Spotify atau simpan antrean aktif ke koleksi server.
-          </p>
-        </div>
-
-        {/* Impor Playlist dari Link Spotify */}
-        <div className="p-4 rounded-xl bg-gradient-to-br from-[#351a57]/60 to-[#242424] border border-[#DC95FF]/30 space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-xs font-bold text-white flex items-center gap-1.5">
-              <Music className="w-3.5 h-3.5 text-[#DC95FF]" />
-              Impor Playlist dari Link Spotify (Spotify &rarr; YouTube Audio)
-            </div>
-            <span className="text-[10px] font-mono text-[#DC95FF] bg-black/30 px-2 py-0.5 rounded-full">
-              Spotify + YouTube
-            </span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <input
-              type="url"
-              placeholder="https://open.spotify.com/playlist/..."
-              value={spotifyPlaylistUrl}
-              onChange={(e) => setSpotifyPlaylistUrl(e.target.value)}
-              className="bg-[#181818] border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-[#B3B3B3] focus:outline-none focus:border-[#DC95FF]"
-            />
-            <input
-              type="text"
-              placeholder="Nama Playlist Kustom (opsional)"
-              value={spotifyPlaylistCustomName}
-              onChange={(e) => setSpotifyPlaylistCustomName(e.target.value)}
-              className="bg-[#181818] border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-[#B3B3B3] focus:outline-none focus:border-[#DC95FF]"
-            />
+      {/* Spotify Precision Tracklist Queue */}
+      <div className="bg-[#181818] border border-white/5 rounded-xl overflow-hidden">
+        <div className="px-6 py-4 border-b border-white/10 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h3 className="text-base font-bold text-white">
+              Daftar Antrean Server ({musicState.queue.length} Lagu)
+            </h3>
+            <p className="text-xs text-[#B3B3B3] mt-0.5">
+              Setiap item antrean memiliki UUID unik sehingga lagu yang sama dapat ditambahkan beberapa kali.
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={importingSpotify}
-              onClick={() => handleImportSpotifyPlaylist(false)}
-              className="px-4 py-1.5 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] disabled:opacity-50 text-black font-bold text-xs transition-transform active:scale-95"
+              onClick={() => onControl('autoplay', !musicState.autoplay)}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors cursor-pointer ${
+                musicState.autoplay
+                  ? 'bg-[#DC95FF]/20 text-[#DC95FF] border border-[#DC95FF]/40'
+                  : 'bg-[#282828] hover:bg-[#3E3E3E] text-[#B3B3B3] hover:text-white'
+              }`}
             >
-              {importingSpotify ? 'Mengimpor dari Spotify...' : 'Impor ke Koleksi Playlist'}
+              Autoplay {musicState.autoplay ? 'ON' : 'OFF'}
             </button>
             <button
               type="button"
-              disabled={importingSpotify}
-              onClick={() => handleImportSpotifyPlaylist(true)}
-              className="px-4 py-1.5 rounded-full bg-white hover:bg-white/90 disabled:opacity-50 text-black font-bold text-xs transition-transform active:scale-95"
+              onClick={() => onControl('mode_247', !musicState.mode_247)}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors cursor-pointer ${
+                musicState.mode_247
+                  ? 'bg-[#DC95FF]/20 text-[#DC95FF] border border-[#DC95FF]/40'
+                  : 'bg-[#282828] hover:bg-[#3E3E3E] text-[#B3B3B3] hover:text-white'
+              }`}
             >
-              Impor & Langsung Putar
+              <Radio className="w-3.5 h-3.5" />
+              Mode 24/7 {musicState.mode_247 ? 'ON' : 'OFF'}
+            </button>
+            <button
+              type="button"
+              onClick={() => onControl('shuffle')}
+              disabled={musicState.queue.length < 2}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#282828] hover:bg-[#3E3E3E] disabled:opacity-40 text-xs font-semibold text-white cursor-pointer"
+            >
+              <Shuffle className="w-3.5 h-3.5" />
+              Acak Antrean
+            </button>
+            <button
+              type="button"
+              onClick={() => onControl('clear')}
+              disabled={musicState.queue.length === 0}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-rose-950/60 hover:bg-rose-900/70 border border-rose-800/50 disabled:opacity-40 text-xs font-semibold text-rose-200 cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Bersihkan Antrean
             </button>
           </div>
         </div>
 
-        <form onSubmit={handleSaveQueueAsPlaylist} className="p-4 rounded-xl bg-[#242424] space-y-3">
-          <div className="text-xs font-bold text-white flex items-center gap-1.5">
-            <FolderPlus className="w-3.5 h-3.5 text-[#DC95FF]" />
-            Simpan Antrean Saat Ini Sebagai Playlist Baru
+        {musicState.queue.length === 0 ? (
+          <div className="p-10 text-center text-sm text-[#B3B3B3]">
+            Antrean kosong. Jika Autoplay aktif, bot akan otomatis memilih lagu berikutnya saat lagu saat ini selesai.
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <input
-              type="text"
-              placeholder="Nama Playlist (mis. Lo-Fi Sesi UAS)"
-              value={newPlaylistName}
-              onChange={(e) => setNewPlaylistName(e.target.value)}
-              className="bg-[#181818] border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white"
-            />
-            <input
-              type="text"
-              placeholder="Deskripsi singkat"
-              value={newPlaylistDesc}
-              onChange={(e) => setNewPlaylistDesc(e.target.value)}
-              className="bg-[#181818] border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white"
-            />
-          </div>
-          <button
-            type="submit"
-            className="px-4 py-1.5 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-white font-bold text-xs"
-          >
-            Simpan Antrean ke Playlist
-          </button>
-        </form>
+        ) : (
+          <div className="p-3">
+            <div className="grid grid-cols-[36px_minmax(0,2fr)_minmax(0,1.1fr)_100px_68px_210px] items-center gap-3 px-3 py-2 border-b border-white/10 text-xs font-medium text-[#B3B3B3]">
+              <span>#</span>
+              <span>Judul &amp; Penyanyi</span>
+              <span>Diminta Oleh</span>
+              <span>ID Unik</span>
+              <span className="flex justify-end">
+                <Clock3 className="w-3.5 h-3.5" />
+              </span>
+              <span className="text-right">Kontrol</span>
+            </div>
 
-        <div className="space-y-3">
-          {playlists.map((pl) => {
-            const items = (pl.items as Array<Record<string, unknown>>) || [];
-            return (
-              <div
-                key={String(pl.playlist_id)}
-                className="p-4 rounded-xl bg-[#242424] space-y-2"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-bold text-white">{String(pl.name)}</div>
-                    <div className="text-xs text-[#B3B3B3]">
-                      Oleh {String(pl.owner_username)} · {items.length} lagu
+            <div className="divide-y divide-white/5 mt-1">
+              {musicState.queue.map((item, idx) => (
+                <div
+                  key={item.item_id || idx}
+                  className="grid grid-cols-[36px_minmax(0,2fr)_minmax(0,1.1fr)_100px_68px_210px] items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 transition-colors"
+                >
+                  <span className="font-mono tabular-nums text-xs text-[#B3B3B3]">
+                    {idx + 1}
+                  </span>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded bg-[#282828] flex items-center justify-center shrink-0 overflow-hidden">
+                      {item.thumbnail_url ? (
+                        <img
+                          src={item.thumbnail_url}
+                          alt={item.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <Music className="w-4 h-4 text-[#DC95FF]" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-semibold text-white text-sm truncate">
+                        {item.title}
+                      </div>
+                      <div className="text-xs text-[#B3B3B3] truncate">
+                        {item.artist} {item.album ? `· ${item.album}` : ''}
+                      </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-[#B3B3B3] truncate">{item.requester_name}</span>
+                  <span className="font-mono text-xs text-white/45 truncate">{item.item_id}</span>
+                  <span className="font-mono tabular-nums text-xs text-[#B3B3B3] text-right">
+                    {formatDuration(item.duration_sec)}
+                  </span>
+                  <div className="flex items-center justify-end gap-1.5">
                     <button
                       type="button"
-                      onClick={async () => {
-                        const resp = await fetch(
-                          `/api/guilds/${guildId}/playlists/${pl.playlist_id}/play`,
-                          { method: 'POST' }
-                        );
-                        if (resp.ok) {
-                          onNotify(`Memuat playlist "${String(pl.name)}" ke antrean server.`);
-                        }
-                      }}
-                      className="px-3.5 py-1 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs"
+                      aria-label={`Putar sekarang ${item.title}`}
+                      onClick={() => onControl('play_item', undefined, item.item_id)}
+                      className="px-2.5 py-1 rounded-full bg-gradient-to-r from-[#8C56D4] to-[#DC95FF] hover:from-[#DC95FF] hover:to-[#FFBEFB] text-black font-bold text-xs inline-flex items-center gap-1 transition-all"
+                      title="Putar Sekarang"
                     >
-                      Putar Playlist
+                      <Play className="w-3 h-3 fill-current" />
+                      Play
                     </button>
                     <button
                       type="button"
-                      onClick={async () => {
-                        await fetch(`/api/guilds/${guildId}/playlists/${pl.playlist_id}`, {
-                          method: 'DELETE',
-                        });
-                        loadLibrary();
-                      }}
-                      className="p-1.5 rounded-full bg-[#181818] hover:bg-rose-900/60 text-[#B3B3B3] hover:text-rose-200"
-                      aria-label={`Hapus playlist ${String(pl.name)}`}
+                      aria-label={`Pindahkan ${item.title} ke urutan teratas`}
+                      onClick={() => onControl('move_to_top', undefined, item.item_id)}
+                      className="px-2 py-1 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-xs text-white inline-flex items-center gap-1"
+                      title="Move to Top"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <ArrowUp className="w-3 h-3" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Hapus ${item.title} dari antrean`}
+                      onClick={() => onControl('remove_item', undefined, item.item_id)}
+                      className="px-2.5 py-1 rounded-full bg-[#282828] hover:bg-rose-900/70 text-xs text-[#B3B3B3] hover:text-rose-200 inline-flex items-center gap-1"
+                      title="Hapus dari Antrean"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Remove
                     </button>
                   </div>
                 </div>
-                {items.length > 0 && (
-                  <div className="text-xs text-[#B3B3B3] pt-1 border-t border-white/10">
-                    {items.map((it) => `${it.title} (${it.artist})`).join(' · ')}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

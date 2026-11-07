@@ -66,6 +66,8 @@ class TestAthenaaSystem(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_music_url_classification_and_youtube_spotify_only_guard(self) -> None:
+        from app.services.music_service import extract_spotify_playlist_tracks
+
         self.assertEqual(
             classify_music_input("https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC")[0],
             "spotify_track",
@@ -75,10 +77,39 @@ class TestAthenaaSystem(unittest.TestCase):
             "spotify_playlist",
         )
         self.assertEqual(
+            classify_music_input("https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX")[0],
+            "spotify_album",
+        )
+        self.assertEqual(
+            classify_music_input("https://www.youtube.com/playlist?list=PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI")[0],
+            "youtube_playlist",
+        )
+        self.assertEqual(
+            classify_music_input("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI")[0],
+            "youtube_playlist",
+        )
+        self.assertEqual(
             classify_music_input("https://www.youtube.com/watch?v=dQw4w9WgXcQ")[0],
             "youtube",
         )
         self.assertEqual(classify_music_input("Hindia Evaluasi")[0], "search_query")
+
+        # Verify direct playlist extraction returns tracks for both Spotify & YouTube playlists
+        yt_pl = extract_spotify_playlist_tracks(
+            "https://www.youtube.com/playlist?list=PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI",
+            max_tracks=10,
+        )
+        self.assertGreater(len(yt_pl.get("tracks") or []), 0)
+
+        # Verify favorites and saved playlists tables are removed from SQLite
+        with self.db.transaction() as conn:
+            tables = {
+                r["name"]
+                for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            }
+        self.assertNotIn("favorites", tables)
+        self.assertNotIn("playlists", tables)
+        self.assertNotIn("playlist_items", tables)
 
         # Ensure non-YouTube URLs (e.g. legacy Apple Music or Spotify links) are converted to ytsearch1:
         safe_target = _to_safe_ytdlp_target(

@@ -13,9 +13,8 @@ import {
   Radio,
   ShieldCheck,
   Music,
-  Heart,
 } from 'lucide-react';
-import { GuildMusicState, TrackItem } from '../types/athenaa';
+import { GuildMusicState } from '../types/athenaa';
 import { formatDuration } from './SearchDropdownBar';
 
 interface SpotifyBottomPlayerProps {
@@ -23,7 +22,6 @@ interface SpotifyBottomPlayerProps {
   browserAudioMuted: boolean;
   onToggleBrowserAudio: () => void;
   onControl: (action: string, value?: unknown, itemId?: string) => void;
-  onAddFavorite?: (track: TrackItem) => void;
 }
 
 const SpotifyBottomPlayerComponent: React.FC<SpotifyBottomPlayerProps> = ({
@@ -31,7 +29,6 @@ const SpotifyBottomPlayerComponent: React.FC<SpotifyBottomPlayerProps> = ({
   browserAudioMuted,
   onToggleBrowserAudio,
   onControl,
-  onAddFavorite,
 }) => {
   const track = musicState.current_track;
   const duration = track?.duration_sec || 1;
@@ -96,16 +93,6 @@ const SpotifyBottomPlayerComponent: React.FC<SpotifyBottomPlayerProps> = ({
                   <span className="text-xs md:text-sm font-semibold text-white truncate hover:underline cursor-pointer">
                     {track.title}
                   </span>
-                  {onAddFavorite && (
-                    <button
-                      type="button"
-                      aria-label={`Simpan ke favorit ${track.title}`}
-                      onClick={() => onAddFavorite(track)}
-                      className="text-[#B3B3B3] hover:text-[#DC95FF] transition-colors shrink-0"
-                    >
-                      <Heart className="w-3.5 h-3.5" />
-                    </button>
-                  )}
                 </div>
                 <div className="text-[11px] md:text-xs text-[#B3B3B3] truncate mt-0.5">
                   <span className="text-white/85 font-medium">{track.artist}</span>

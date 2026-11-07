@@ -2218,11 +2218,11 @@ def build_discord_bot(
     # =========================================================================
     # Music & Voice Slash Commands (Modern Rich Embeds)
     # =========================================================================
-    @bot.tree.command(name="play", description="Putar lagu dari judul/penyanyi, URL YouTube, Spotify Track/Playlist, atau Radio")
-    @app_commands.describe(query="Ketik judul lagu & penyanyi (pilih dari dropdown) atau tempel URL YouTube/Spotify")
+    @bot.tree.command(name="play", description="Putar lagu atau playlist langsung dari judul/penyanyi, URL YouTube, Spotify Track/Playlist, atau Radio")
+    @app_commands.describe(query="Ketik judul lagu & penyanyi (pilih dari dropdown) atau tempel URL YouTube/Spotify (Track/Playlist/Album)")
     async def cmd_play(interaction: discord.Interaction, query: str) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
-        uid, uname, _, _, _ = _member_context(interaction)
+        uid, uname, roles, is_admin, is_owner = _member_context(interaction)
 
         # Wajibkan user berada di Voice Channel sebelum bisa memutar lagu
         user_vc = (
@@ -2271,15 +2271,18 @@ def build_discord_bot(
         asyncio.create_task(bot.ensure_voice_connected(guild_id, st_init.voice_channel_id, uid))
 
         kind, target = classify_music_input(query)
-        if kind in ("spotify_playlist", "spotify_album"):
+        if kind in ("spotify_playlist", "spotify_album", "youtube_playlist"):
             try:
                 pl_data = await asyncio.to_thread(extract_spotify_playlist_tracks, query, 30)
                 tracks: List[TrackCandidate] = pl_data.get("tracks") or []
-                pl_name = str(pl_data.get("playlist_name") or "Spotify Playlist")
+                pl_name = str(
+                    pl_data.get("playlist_name")
+                    or ("YouTube Playlist" if kind == "youtube_playlist" else "Spotify Playlist")
+                )
                 if not tracks:
                     err_emb = _make_embed(
-                        title="❌ Playlist Spotify Kosong / Tidak Terbaca",
-                        description="Tidak ditemukan daftar lagu pada tautan Spotify tersebut.",
+                        title="❌ Playlist Kosong / Tidak Terbaca",
+                        description="Tidak ditemukan daftar lagu pada tautan playlist tersebut.",
                         color=0xEF4444,
                         category_label="Athenaa Music Engine",
                     )
@@ -2294,7 +2297,7 @@ def build_discord_bot(
                         guild_id=guild_id,
                         title=cand.title,
                         artist=cand.artist,
-                        album="",
+                        album=pl_name,
                         duration_sec=cand.duration_sec,
                         source_type=cand.source_type,
                         source_url=cand.source_url,
@@ -2317,11 +2320,12 @@ def build_discord_bot(
                 else:
                     asyncio.create_task(bot._notify_web(guild_id))
 
+                source_label = "YouTube Playlist" if kind == "youtube_playlist" else "Spotify Playlist / Album"
                 pl_emb = _make_embed(
-                    title=f"🎶 Playlist Spotify Dimuat: {pl_name}",
-                    description=f"Berhasil menambahkan **{len(tracks)} lagu** ke antrean server.",
+                    title=f"🎶 {source_label} Dimuat: {pl_name}",
+                    description=f"Berhasil menambahkan **{len(tracks)} lagu** langsung ke antrean server.",
                     color=0xDC95FF,
-                    category_label="Spotify Playlist Importer",
+                    category_label=f"Direct {source_label} Player",
                     thumbnail_url=tracks[0].thumbnail_url if tracks else "",
                 )
                 preview_lines = "\n".join(
@@ -2335,7 +2339,7 @@ def build_discord_bot(
                 return
             except Exception as exc:
                 err_emb = _make_embed(
-                    title="❌ Gagal Memuat Playlist Spotify",
+                    title="❌ Gagal Memuat Playlist",
                     description=str(exc),
                     color=0xEF4444,
                     category_label="Athenaa Music Engine",
@@ -2423,7 +2427,8 @@ def build_discord_bot(
     ) -> List[app_commands.Choice[str]]:
         q = (current or "").strip()
         if q.startswith(("http://", "https://")):
-            return [app_commands.Choice(name=f"🔗 Putar URL: {q[:80]}", value=q[:100])]
+            clean_url = q.split("&si=")[0].split("?si=")[0] if "spotify.com" in q else q
+            return [app_commands.Choice(name=f"🔗 Putar Langsung URL/Playlist: {clean_url[:68]}", value=clean_url[:100])]
         try:
             candidates = await asyncio.wait_for(
                 asyncio.to_thread(search_songs_with_singer, q, 25),

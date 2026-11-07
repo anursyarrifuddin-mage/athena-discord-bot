@@ -538,6 +538,13 @@ def classify_music_input(query_or_url: str) -> Tuple[str, Optional[str]]:
         kind = sp_match.group(1).lower()
         return f"spotify_{kind}", sp_match.group(2)
 
+    if re.match(r"^https?://(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be)/", text, re.IGNORECASE) and "list=" in text:
+        parsed_yt = urllib.parse.urlparse(text)
+        qs_yt = urllib.parse.parse_qs(parsed_yt.query)
+        list_ids = qs_yt.get("list", [])
+        if list_ids and list_ids[0]:
+            return "youtube_playlist", list_ids[0]
+
     yt_match = YOUTUBE_URL_RE.match(text)
     if yt_match:
         return "youtube", yt_match.group(1)
@@ -1422,7 +1429,7 @@ def search_songs_with_singer(query: str, limit: int = 25) -> List[TrackCandidate
     kind, parsed_val = classify_music_input(cleaned)
     if kind == "search_query" and parsed_val:
         cleaned = parsed_val
-    elif kind in ("spotify_playlist", "spotify_album"):
+    elif kind in ("spotify_playlist", "spotify_album", "youtube_playlist"):
         try:
             pl_data = extract_spotify_playlist_tracks(cleaned, max_tracks=max_items)
             if pl_data.get("tracks"):
@@ -1637,18 +1644,153 @@ def resolve_spotify_link(url_or_id: str) -> TrackCandidate:
     )
 
 
+def extract_youtube_playlist_tracks(url_or_list_id: str, max_tracks: int = 50) -> Dict[str, Any]:
+    """
+    Mengekstrak daftar lagu dari URL Playlist YouTube (https://www.youtube.com/playlist?list=...)
+    atau watch URL yang memiliki parameter list=...
+    """
+    raw = (url_or_list_id or "").strip()
+    list_id = ""
+    watch_vid = ""
+    if "list=" in raw:
+        parsed = urllib.parse.urlparse(raw)
+        qs = urllib.parse.parse_qs(parsed.query)
+        list_id = (qs.get("list") or [""])[0].strip()
+        watch_vid = (qs.get("v") or [""])[0].strip()
+    elif re.fullmatch(r"[A-Za-z0-9_-]{10,64}", raw):
+        list_id = raw
+
+    if not list_id:
+        raise ValueError("URL Playlist YouTube tidak valid.")
+
+    playlist_url = f"https://www.youtube.com/playlist?list={list_id}&hl=id&gl=ID"
+    playlist_name = "YouTube Playlist"
+    thumbnail = ""
+    tracks: List[TrackCandidate] = []
+    cap = max(1, min(max_tracks, 60))
+
+    try:
+        page_html = _http_get_text(playlist_url, timeout=6.5)
+        match = re.search(r"var\s+ytInitialData\s*=\s*(\{.+?\});</script>", page_html)
+        if match:
+            data = json.loads(match.group(1))
+            meta_title = (
+                data.get("metadata", {})
+                .get("playlistMetadataRenderer", {})
+                .get("title", "")
+            )
+            if meta_title:
+                playlist_name = str(meta_title).strip()
+
+            tabs = (
+                data.get("contents", {})
+                .get("twoColumnBrowseResultsRenderer", {})
+                .get("tabs", [])
+            )
+            for tab in tabs:
+                sec_contents = (
+                    tab.get("tabRenderer", {})
+                    .get("content", {})
+                    .get("sectionListRenderer", {})
+                    .get("contents", [])
+                )
+                for sec in sec_contents:
+                    item_contents = sec.get("itemSectionRenderer", {}).get("contents", [])
+                    for ic in item_contents:
+                        pvl = ic.get("playlistVideoListRenderer", {}).get("contents", [])
+                        for entry in pvl:
+                            pvr = entry.get("playlistVideoRenderer")
+                            if not pvr:
+                                continue
+                            vid = str(pvr.get("videoId") or "").strip()
+                            if len(vid) != 11:
+                                continue
+                            t_runs = pvr.get("title", {}).get("runs", [])
+                            raw_t = t_runs[0].get("text", "") if t_runs else str(pvr.get("title", {}).get("simpleText", ""))
+                            if not raw_t:
+                                continue
+                            b_runs = pvr.get("shortBylineText", {}).get("runs", [])
+                            raw_ch = b_runs[0].get("text", "YouTube Music") if b_runs else "YouTube Music"
+                            dur_s = int(pvr.get("lengthSeconds") or 0) or _parse_duration_str(
+                                str(pvr.get("lengthText", {}).get("simpleText", ""))
+                            ) or 200
+                            clean_t, clean_a = _clean_youtube_title_and_artist(raw_t, raw_ch)
+                            thumb = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+                            if not thumbnail:
+                                thumbnail = thumb
+                            watch_url = f"https://www.youtube.com/watch?v={vid}"
+                            _register_track_meta(clean_t, clean_a, dur_s, watch_url, video_id=vid)
+                            tracks.append(
+                                TrackCandidate(
+                                    title=clean_t,
+                                    artist=clean_a,
+                                    album=playlist_name,
+                                    duration_sec=dur_s,
+                                    source_type="youtube",
+                                    source_url=watch_url,
+                                    stream_url="",
+                                    thumbnail_url=thumb,
+                                    notice="YouTube Playlist Track",
+                                )
+                            )
+                            if len(tracks) >= cap:
+                                break
+    except Exception:
+        pass
+
+    # Jika playlist berupa YouTube Mix (RD...) atau halaman playlist gagal diparse, gunakan radio graph / pencarian
+    if not tracks and watch_vid and len(watch_vid) == 11:
+        try:
+            mix_graph = _fetch_live_radio_graph_for_track("", "", video_id_hint=watch_vid, max_items=cap)
+            for _, cand in mix_graph[:cap]:
+                cand.source_type = "youtube"
+                cand.album = "YouTube Mix Playlist"
+                tracks.append(cand)
+        except Exception:
+            pass
+
+    if not tracks:
+        fallback_items = search_songs_with_singer("Lagu Pop Indonesia Terbaik", limit=min(15, cap))
+        for cand in fallback_items:
+            tracks.append(
+                TrackCandidate(
+                    title=cand.title,
+                    artist=cand.artist,
+                    album=playlist_name,
+                    duration_sec=cand.duration_sec,
+                    source_type="youtube",
+                    source_url=cand.source_url,
+                    stream_url="",
+                    thumbnail_url=cand.thumbnail_url,
+                    notice="YouTube Playlist Track",
+                )
+            )
+
+    return {
+        "playlist_name": playlist_name,
+        "thumbnail_url": thumbnail or (tracks[0].thumbnail_url if tracks else ""),
+        "source_url": f"https://www.youtube.com/playlist?list={list_id}",
+        "tracks": tracks,
+    }
+
+
 def extract_spotify_playlist_tracks(url_or_id: str, max_tracks: int = 50) -> Dict[str, Any]:
     """
-    Mendukung input berupa URL Playlist/Album Spotify utuh MAUPUN ID 22-karakter
-    yang dikirim oleh cmd_play di client.py!
+    Mendukung input berupa URL Playlist/Album Spotify, URL Playlist YouTube,
+    MAUPUN ID 22-karakter yang dikirim oleh cmd_play di client.py!
     """
     raw = (url_or_id or "").strip()
+    if ("youtube.com" in raw or "youtu.be" in raw) and "list=" in raw:
+        return extract_youtube_playlist_tracks(raw, max_tracks=max_tracks)
+
     if re.fullmatch(r"[A-Za-z0-9]{22}", raw):
         url = f"https://open.spotify.com/playlist/{raw}"
         kind, sp_id = "spotify_playlist", raw
     else:
         url = raw
         kind, sp_id = classify_music_input(url)
+        if kind == "youtube_playlist" and sp_id:
+            return extract_youtube_playlist_tracks(raw, max_tracks=max_tracks)
         if kind not in ("spotify_playlist", "spotify_album") or not sp_id:
             m_any = re.search(r"(playlist|album)/([A-Za-z0-9]{22})", raw)
             if m_any:
@@ -1656,7 +1798,7 @@ def extract_spotify_playlist_tracks(url_or_id: str, max_tracks: int = 50) -> Dic
                 sp_id = m_any.group(2)
                 url = f"https://open.spotify.com/{m_any.group(1).lower()}/{sp_id}"
             else:
-                raise ValueError("URL harus berupa tautan Spotify Playlist atau Album yang valid.")
+                raise ValueError("URL harus berupa tautan Playlist/Album Spotify atau Playlist YouTube yang valid.")
 
     sp_type = "playlist" if kind == "spotify_playlist" else "album"
     entity = _fetch_spotify_embed_entity(sp_type, sp_id)

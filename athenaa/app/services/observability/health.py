@@ -248,12 +248,18 @@ def create_memory_health_check(threshold_pct: float = 90) -> Callable[[], Health
 
 def create_cpu_health_check(threshold_pct: float = 90) -> Callable[[], HealthCheckResult]:
     """Create a CPU usage health check."""
+    if PSUTIL_AVAILABLE:
+        try:
+            psutil.cpu_percent(interval=None)
+        except Exception:
+            pass
+
     def check() -> HealthCheckResult:
         start = time.perf_counter()
         try:
             if PSUTIL_AVAILABLE:
-                # Quick CPU check (non-blocking)
-                cpu_pct = psutil.cpu_percent(interval=0.1)
+                # Non-blocking CPU check
+                cpu_pct = psutil.cpu_percent(interval=None)
                 
                 if cpu_pct >= threshold_pct:
                     status = HealthStatus.UNHEALTHY
@@ -292,7 +298,7 @@ def create_cpu_health_check(threshold_pct: float = 90) -> Callable[[], HealthChe
 def create_external_service_check(
     name: str, 
     url: str, 
-    timeout: float = 5.0,
+    timeout: float = 3.0,
     expected_status: int = 200
 ) -> Callable[[], HealthCheckResult]:
     """Create an external service connectivity check."""
@@ -322,7 +328,7 @@ def create_external_service_check(
         except Exception as e:
             return HealthCheckResult(
                 name=name,
-                status=HealthStatus.UNHEALTHY,
+                status=HealthStatus.DEGRADED,
                 message=f"{name} unreachable: {e}",
                 details={"url": url},
                 duration_ms=(time.perf_counter() - start) * 1000,
@@ -341,8 +347,8 @@ def create_bot_health_check(
             if bot is None:
                 return HealthCheckResult(
                     name="discord_bot",
-                    status=HealthStatus.UNHEALTHY,
-                    message="Bot instance not initialized",
+                    status=HealthStatus.DEGRADED,
+                    message="Bot running in standalone web mode or not yet connected",
                     duration_ms=(time.perf_counter() - start) * 1000,
                 )
             
@@ -350,7 +356,7 @@ def create_bot_health_check(
                 return HealthCheckResult(
                     name="discord_bot",
                     status=HealthStatus.DEGRADED,
-                    message="Bot not ready",
+                    message="Bot connecting to Discord Gateway",
                     duration_ms=(time.perf_counter() - start) * 1000,
                 )
             
@@ -377,8 +383,8 @@ def create_bot_health_check(
         except Exception as e:
             return HealthCheckResult(
                 name="discord_bot",
-                status=HealthStatus.UNHEALTHY,
-                message=f"Bot check failed: {e}",
+                status=HealthStatus.DEGRADED,
+                message=f"Bot check warning: {e}",
                 duration_ms=(time.perf_counter() - start) * 1000,
             )
     return check
@@ -401,9 +407,7 @@ def create_queue_health_check(
                 )
             
             # Check active guilds
-            active_guilds = len(getattr(qs, 'active_guilds', {}))
             states = getattr(qs, '_states', {})
-            
             total_queued = sum(len(s.queue) for s in states.values())
             playing = sum(1 for s in states.values() if s.is_playing)
             
@@ -412,7 +416,7 @@ def create_queue_health_check(
                 status=HealthStatus.HEALTHY,
                 message="Queue service operational",
                 details={
-                    "active_guilds": active_guilds,
+                    "active_guilds": len(states),
                     "total_states": len(states),
                     "total_queued_tracks": total_queued,
                     "currently_playing": playing,
@@ -436,8 +440,9 @@ def create_default_health_checker(
     db_path: Optional[str] = None,
     bot_getter: Optional[Callable[[], Any]] = None,
     queue_service_getter: Optional[Callable[[], Any]] = None,
+    include_external: bool = False,
 ) -> HealthChecker:
-    """Create a health checker with standard checks."""
+    """Create a health checker with fast non-blocking standard checks."""
     checker = HealthChecker(service_name, version)
     
     # System checks
@@ -449,19 +454,17 @@ def create_default_health_checker(
     if db_path:
         checker.register_check("database", create_db_health_check(db_path))
     
-    # External services
-    checker.register_check("discord_api", create_external_service_check(
-        "discord_api", "https://discord.com/api/v10/gateway"
-    ))
-    checker.register_check("youtube", create_external_service_check(
-        "youtube", "https://www.youtube.com"
-    ))
-    checker.register_check("spotify", create_external_service_check(
-        "spotify", "https://open.spotify.com"
-    ))
-    checker.register_check("lrclib", create_external_service_check(
-        "lrclib", "https://lrclib.net/api/health"
-    ))
+    # Optional external checks (disabled by default to keep probes fast & non-blocking)
+    if include_external:
+        checker.register_check("discord_api", create_external_service_check(
+            "discord_api", "https://discord.com/api/v10/gateway"
+        ))
+        checker.register_check("youtube", create_external_service_check(
+            "youtube", "https://www.youtube.com"
+        ))
+        checker.register_check("spotify", create_external_service_check(
+            "spotify", "https://open.spotify.com"
+        ))
     
     # Bot check
     if bot_getter:
@@ -476,26 +479,14 @@ def create_default_health_checker(
 
 # FastAPI endpoints
 def create_health_endpoints(app, checker: HealthChecker):
-    """Add health check endpoints to FastAPI app."""
-    
-    @app.get("/health")
-    async def health():
-        """Liveness probe - service is running."""
-        health = checker.run_all_checks()
-        # For liveness, we only care if service is up
-        return {
-            "status": health.status.value,
-            "service": checker.service_name,
-            "version": health.version,
-            "uptime_seconds": round(health.uptime_seconds, 1),
-        }
-    
+    """Add health check endpoints to FastAPI app before any catch-all SPA route."""
+    routes_before = len(app.router.routes)
+
     @app.get("/ready")
     async def ready():
         """Readiness probe - service can handle requests."""
-        health = checker.run_all_checks()
-        # For readiness, we need all critical checks to pass
-        critical_checks = {"database", "discord_bot", "queue_service"}
+        health = await asyncio.to_thread(checker.run_all_checks)
+        critical_checks = {"database", "queue_service"}
         failed_critical = [
             c.name for c in health.checks 
             if c.name in critical_checks and c.status == HealthStatus.UNHEALTHY
@@ -523,7 +514,7 @@ def create_health_endpoints(app, checker: HealthChecker):
     @app.get("/health/details")
     async def health_details():
         """Detailed health check results."""
-        health = checker.run_all_checks()
+        health = await asyncio.to_thread(checker.run_all_checks)
         return {
             "status": health.status.value,
             "service": checker.service_name,
@@ -541,3 +532,15 @@ def create_health_endpoints(app, checker: HealthChecker):
                 for c in health.checks
             ],
         }
+
+    # Ensure these routes are placed BEFORE any catch-all("/{full_path:path}") route
+    added_routes = app.router.routes[routes_before:]
+    if added_routes:
+        del app.router.routes[routes_before:]
+        insert_idx = len(app.router.routes)
+        for i, r in enumerate(app.router.routes):
+            if getattr(r, "path", "") == "/{full_path:path}":
+                insert_idx = i
+                break
+        for idx, r in enumerate(added_routes):
+            app.router.routes.insert(insert_idx + idx, r)
