@@ -25,10 +25,57 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import httpx
+
 from app.config import settings
+from app.config.loader import get_enabled_radio_stations, get_music_config
 from app.security.validators import validate_external_url
 
 logger = logging.getLogger("athenaa.music")
+
+# Load config from YAML
+_music_config = get_music_config()
+
+# Radio stations from config (replaces VERIFIED_RADIO_STATIONS)
+VERIFIED_RADIO_STATIONS = [
+    {
+        "id": station.id,
+        "name": station.name,
+        "artist": station.artist,
+        "genre": station.genre,
+        "stream_url": station.stream_url,
+    }
+    for station in get_enabled_radio_stations()
+]
+
+# Constants from config
+MIN_SINGLE_DURATION_SEC = _music_config.min_single_duration_sec
+MAX_SINGLE_DURATION_SEC = _music_config.max_single_duration_sec
+MIN_VIRAL_VIEWS_THRESHOLD = _music_config.min_viral_views_threshold
+
+# Global async HTTP client for connection pooling
+_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def get_http_client() -> httpx.AsyncClient:
+    global _HTTP_CLIENT
+    if _HTTP_CLIENT is None or _HTTP_CLIENT.is_closed:
+        _HTTP_CLIENT = httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, connect=5.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+            },
+        )
+    return _HTTP_CLIENT
+
+
+async def close_http_client() -> None:
+    global _HTTP_CLIENT
+    if _HTTP_CLIENT and not _HTTP_CLIENT.is_closed:
+        await _HTTP_CLIENT.aclose()
+        _HTTP_CLIENT = None
 
 
 class LRUCache:
@@ -38,6 +85,8 @@ class LRUCache:
         self.max_size = max_size
         self.ttl = ttl_seconds
         self._cache: OrderedDict[str, Tuple[Any, float]] = OrderedDict()
+        self._last_cleanup = 0.0
+        self._cleanup_interval = 60.0  # Only cleanup once per minute
 
     def get(self, key: str) -> Optional[Any]:
         if key not in self._cache:
@@ -55,6 +104,7 @@ class LRUCache:
         elif len(self._cache) >= self.max_size:
             self._cache.popitem(last=False)  # Evict LRU
         self._cache[key] = (value, time.time())
+        self._maybe_cleanup()
 
     def pop(self, key: str, default: Any = None) -> Any:
         if key in self._cache:
@@ -69,6 +119,13 @@ class LRUCache:
             del self._cache[k]
         return len(expired)
 
+    def _maybe_cleanup(self) -> None:
+        """Periodic cleanup - only run once per interval to avoid O(n) on every operation."""
+        now = time.time()
+        if now - self._last_cleanup > self._cleanup_interval:
+            self.clear_expired()
+            self._last_cleanup = now
+
     def __contains__(self, key: str) -> bool:
         if key not in self._cache:
             return False
@@ -79,8 +136,7 @@ class LRUCache:
         return True
 
     def __len__(self) -> int:
-        # Clean expired first
-        self.clear_expired()
+        # Don't clean expired on every len() call - use periodic cleanup instead
         return len(self._cache)
 
     def __getitem__(self, key: str) -> Any:
@@ -106,47 +162,18 @@ NON_LATIN_SCRIPT_RE = re.compile(
     r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u0400-\u04ff\u0e00-\u0e7f]"
 )
 
-# Rentang durasi lagu satuan (35 detik s/d 540 detik = 9 menit)
-# Lagu TikTok pendek (40s) dan lagu panjang (To The Bone / Dewa 19) tetap lolos, tapi Full Album (30m-2h) diblokir!
-MIN_SINGLE_DURATION_SEC = 35
-MAX_SINGLE_DURATION_SEC = 540
-MIN_VIRAL_VIEWS_THRESHOLD = 25_000
+# Constants loaded from config YAML (see app/config/loader.py)
+MIN_SINGLE_DURATION_SEC = _music_config.min_single_duration_sec
+MAX_SINGLE_DURATION_SEC = _music_config.max_single_duration_sec
+MIN_VIRAL_VIEWS_THRESHOLD = _music_config.min_viral_views_threshold
 
-VERIFIED_RADIO_STATIONS: List[Dict[str, str]] = [
-    {
-        "id": "prambors",
-        "name": "Prambors FM 102.2 Jakarta",
-        "artist": "Live Radio Stream · Top 40 Indonesia",
-        "genre": "Top 40 / Pop Indonesia & Internasional",
-        "stream_url": "https://s7.alhastream.com/radio/8030/radio",
-    },
-    {
-        "id": "hardrockfm",
-        "name": "Hard Rock FM 87.6 Jakarta",
-        "artist": "Live Radio Stream · Pop & Rock",
-        "genre": "Lifestyle / Rock / Pop Hits",
-        "stream_url": "https://n09.radiojar.com/7csmg90fuqruv",
-    },
-    {
-        "id": "genfm",
-        "name": "Gen FM 98.7 Jakarta",
-        "artist": "Live Radio Stream · Musik Hits Indonesia",
-        "genre": "Musik Hits Terbaik Indonesia",
-        "stream_url": "https://n07.radiojar.com/4ywdgup3bnzuv",
-    },
-    {
-        "id": "lofigirl",
-        "name": "Lofi Hip Hop Beats 24/7 Stream",
-        "artist": "StreamAfrica · Chill & Focus",
-        "genre": "Chill / Study Beats",
-        "stream_url": "https://play.streamafrica.net/lofiradio",
-    },
-]
+# Radio stations loaded from config YAML
+VERIFIED_RADIO_STATIONS = VERIFIED_RADIO_STATIONS  # Already loaded from config above
 
 
 def get_verified_radios() -> List[Dict[str, str]]:
-    """Mengembalikan daftar stasiun radio internet terverifikasi."""
-    return list(VERIFIED_RADIO_STATIONS)
+    """Mengembalikan daftar stasiun radio internet terverifikasi dari config YAML."""
+    return VERIFIED_RADIO_STATIONS
 
 
 # Katalog 30 Lagu Satuan Populer (Tanpa Fake Video ID agar saat diputar selalu mencari stream aslinya)
@@ -730,7 +757,30 @@ def _search_youtube_with_views(
     studio_master_only: bool = False,
 ) -> List[Tuple[int, TrackCandidate]]:
     """
-    Mencari single track di YouTube dan menyimpan `source_url = https://www.youtube.com/watch?v={video_id}`
+    SYNC wrapper for backward compatibility - calls async version.
+    For new code, use _search_youtube_with_views_async directly.
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(
+        _search_youtube_with_views_async(query, limit, default_source_type, min_views, studio_master_only)
+    )
+
+
+async def _search_youtube_with_views_async(
+    query: str,
+    limit: int = 25,
+    default_source_type: str = "spotify_matched",
+    min_views: int = 0,
+    studio_master_only: bool = False,
+) -> List[Tuple[int, TrackCandidate]]:
+    """
+    Mencari single track di YouTube menggunakan async HTTP client (httpx).
+    Menyimpan `source_url = https://www.youtube.com/watch?v={video_id}`
     dengan `source_type = 'spotify_matched'` agar client.py memutar 100% video tersebut tanpa salah lagu!
     """
     cleaned = re.sub(
@@ -755,18 +805,9 @@ def _search_youtube_with_views(
     seen_base_titles: Set[str] = set()
 
     try:
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=5.5) as resp:
-            page_html = resp.read().decode("utf-8", errors="ignore")
+        client = get_http_client()
+        resp = await client.get(url, timeout=5.5)
+        page_html = resp.text
 
         match = re.search(r"var\s+ytInitialData\s*=\s*(\{.+?\});</script>", page_html)
         if not match:
@@ -886,6 +927,25 @@ def search_youtube_http(
     min_views: int = 0,
     prefer_popular: bool = True,
 ) -> List[TrackCandidate]:
+    """SYNC wrapper for backward compatibility."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(
+        search_youtube_http_async(query, limit, default_source_type, min_views, prefer_popular)
+    )
+
+
+async def search_youtube_http_async(
+    query: str,
+    limit: int = 25,
+    default_source_type: str = "spotify_matched",
+    min_views: int = 0,
+    prefer_popular: bool = True,
+) -> List[TrackCandidate]:
     cleaned = (query or "").strip()
     if not cleaned:
         return []
@@ -896,7 +956,7 @@ def search_youtube_http(
     if cached_hit and (now_m - cached_hit[0]) < _SEARCH_CACHE_TTL_SEC:
         return list(cached_hit[1])
 
-    scored_results = _search_youtube_with_views(
+    scored_results = await _search_youtube_with_views_async(
         cleaned,
         limit=limit,
         default_source_type=default_source_type,
@@ -936,7 +996,50 @@ def _resolve_seed_video_id(title: str, artist: str, video_id_hint: str = "") -> 
     return ""
 
 
+async def _resolve_seed_video_id_async(title: str, artist: str, video_id_hint: str = "") -> str:
+    """Async version of _resolve_seed_video_id."""
+    if video_id_hint and len(video_id_hint) == 11:
+        return video_id_hint
+    reg_vid = _extract_vid_from_url_or_registry("", title=title, artist=artist)
+    if reg_vid and len(reg_vid) == 11:
+        return reg_vid
+
+    q_str = f"{artist} {title}".strip() if artist and artist.lower() != "spotify artist" else title
+    scored = await _search_youtube_with_views_async(
+        q_str,
+        limit=2,
+        default_source_type="spotify_matched",
+        studio_master_only=False,
+    )
+    if scored:
+        cand = scored[0][1]
+        found_vid = _extract_vid_from_url_or_registry(cand.source_url, cand.title, cand.artist)
+        if found_vid:
+            return found_vid
+    return ""
+
+
 def _fetch_live_radio_graph_for_track(
+    title: str,
+    artist: str,
+    video_id_hint: str = "",
+    max_items: int = 30,
+) -> List[Tuple[int, TrackCandidate]]:
+    """
+    SYNC wrapper for backward compatibility.
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(
+        _fetch_live_radio_graph_for_track_async(title, artist, video_id_hint, max_items)
+    )
+
+
+async def _fetch_live_radio_graph_for_track_async(
     title: str,
     artist: str,
     video_id_hint: str = "",
@@ -947,7 +1050,7 @@ def _fetch_live_radio_graph_for_track(
     Setiap kandidat menyimpan `source_url = https://www.youtube.com/watch?v={c_vid}`
     dan `source_type = 'spotify_matched'` sehingga audio yang diputar 100% lagu tersebut!
     """
-    vid = _resolve_seed_video_id(title, artist, video_id_hint=video_id_hint)
+    vid = await _resolve_seed_video_id_async(title, artist, video_id_hint=video_id_hint)
     if not vid:
         return []
 
@@ -955,18 +1058,9 @@ def _fetch_live_radio_graph_for_track(
     extracted: List[Tuple[int, TrackCandidate]] = []
 
     try:
-        req = urllib.request.Request(
-            mix_url,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=5.5) as resp:
-            page_html = resp.read().decode("utf-8", errors="ignore")
+        client = get_http_client()
+        resp = await client.get(mix_url, timeout=5.5)
+        page_html = resp.text
 
         match = re.search(r"var\s+ytInitialData\s*=\s*(\{.+?\});</script>", page_html)
         if not match:
@@ -1113,6 +1207,26 @@ def recommend_autoplay_tracks(
     guild_id: str = "",
     previous_tracks: Optional[List[Tuple[str, str]]] = None,
 ) -> List[TrackCandidate]:
+    """SYNC wrapper for backward compatibility."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(
+        recommend_autoplay_tracks_async(seed_title, seed_artist, exclude_keys, limit, guild_id, previous_tracks)
+    )
+
+
+async def recommend_autoplay_tracks_async(
+    seed_title: str,
+    seed_artist: str,
+    exclude_keys: Optional[Any] = None,
+    limit: int = 5,
+    guild_id: str = "",
+    previous_tracks: Optional[List[Tuple[str, str]]] = None,
+) -> List[TrackCandidate]:
     """
     Pure Organic Viral Autoplay:
     - Mengikuti rantai Radio Mix (RD{video_id}) dari Lagu B (saat ini) dan Lagu A (sebelumnya).
@@ -1176,10 +1290,10 @@ def recommend_autoplay_tracks(
                 track_a_vid = _extract_vid_from_url_or_registry("", title=p_title, artist=p_artist)
                 break
 
-    graph_b = _fetch_live_radio_graph_for_track(seed_title, seed_artist, video_id_hint=track_b_vid, max_items=30)
+    graph_b = await _fetch_live_radio_graph_for_track_async(seed_title, seed_artist, video_id_hint=track_b_vid, max_items=30)
     graph_a: List[Tuple[int, TrackCandidate]] = []
     if track_a_title:
-        graph_a = _fetch_live_radio_graph_for_track(track_a_title, track_a_artist, video_id_hint=track_a_vid, max_items=20)
+        graph_a = await _fetch_live_radio_graph_for_track_async(track_a_title, track_a_artist, video_id_hint=track_a_vid, max_items=20)
 
     candidate_map: Dict[str, Tuple[int, TrackCandidate]] = {}
     base_titles_in_a: Set[str] = set()
@@ -1214,7 +1328,7 @@ def recommend_autoplay_tracks(
         candidate_map[bt_b] = (max(80_000, prev_score + score_b + bonus), cand_b)
 
     if len(candidate_map) < limit * 2:
-        related_search = _search_youtube_with_views(
+        related_search = await _search_youtube_with_views_async(
             f"{clean_b_artist} {clean_b_title} official audio",
             limit=12,
             default_source_type="spotify_matched",

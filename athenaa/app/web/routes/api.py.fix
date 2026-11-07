@@ -1,0 +1,60 @@
+with open(r'C:\Users\violi\Downloads\athena-discord-bot\athenaa\app\web\routes\api.py', 'r') as f:
+    content = f.read()
+
+# Find and replace the problematic section
+old = '''    # Rate limiter untuk auth endpoints (stricter: 10 req/min per IP)
+auth_rate_limiter = SlidingWindowRateLimiter(max_requests=10, window_seconds=60)
+
+
+def _check_auth_rate_limit(request: Request) -> None:
+    """Check rate limit for auth endpoints based on client IP."""
+    client_ip = request.client.host if request.client else "unknown"
+    if not auth_rate_limiter.allow(f"auth:{client_ip}"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Terlalu banyak percobaan login. Coba lagi nanti.")
+    async def api_auth_login():
+        return JSONResponse(
+            status_code=403,
+            content={
+                "authenticated": False,
+                "error": "Gunakan tombol Login dengan Discord OAuth2.",
+            },
+        )
+
+    @app.post("/api/auth/logout")
+    async def api_auth_logout(request: Request):'''
+
+new = '''    # Rate limiter untuk auth endpoints (stricter: 10 req/min per IP)
+    auth_rate_limiter = SlidingWindowRateLimiter(max_requests=10, window_seconds=60)
+
+
+    def _check_auth_rate_limit(request: Request) -> None:
+        """Check rate limit for auth endpoints based on client IP."""
+        client_ip = request.client.host if request.client else "unknown"
+        if not auth_rate_limiter.allow(f"auth:{client_ip}"):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=429, detail="Terlalu banyak percobaan login. Coba lagi nanti.")
+
+
+    @app.post("/api/auth/login")
+    async def api_auth_login(request: Request):
+        _check_auth_rate_limit(request)
+        return JSONResponse(
+            status_code=403,
+            content={
+                "authenticated": False,
+                "error": "Gunakan tombol Login dengan Discord OAuth2.",
+            },
+        )
+
+
+    @app.post("/api/auth/logout")
+    async def api_auth_logout(request: Request):'''
+
+if old in content:
+    content = content.replace(old, new)
+    with open(r'C:\Users\violi\Downloads\athena-discord-bot\athenaa\app\web\routes\api.py', 'w') as f:
+        f.write(content)
+    print('SUCCESS: Fixed rate limiter section')
+else:
+    print('NOT FOUND: Pattern not matched')

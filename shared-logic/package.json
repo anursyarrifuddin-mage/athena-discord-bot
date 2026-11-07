@@ -1,0 +1,27 @@
+{
+  "name": "athenaa-shared",
+  "version": "0.1.0",
+  "description": "Shared logic for Athenaa Discord Bot - WASM bindings for TypeScript",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "sideEffects": false,
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "athenaa_shared_bg.wasm",
+    "athenaa_shared.d.ts"
+  ],
+  "scripts": {
+    "build": "wasm-pack build --target web --out-dir ./pkg --release",
+    "build:node": "wasm-pack build --target nodejs --out-dir ./pkg-node --release",
+    "test": "wasm-pack test --headless --firefox"
+  },
+  "keywords": [
+    "athenaa",
+    "discord-bot",
+    "shared-logic",
+    "wasm"
+  ],
+  "author": "Athenaa Team",
+  "license": "MIT"
+}

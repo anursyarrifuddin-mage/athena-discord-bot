@@ -165,7 +165,7 @@ from app.services.music_service import (
     resolve_spotify_link,
     search_songs_with_singer,
 )
-from app.services.queue_service import GuildQueueService, queue_service as default_queue_service
+from app.services.queue import GuildQueueService, queue_service as default_queue_service
 
 logger = logging.getLogger("athenaa.bot")
 
@@ -1976,12 +1976,16 @@ def build_discord_bot(
                 await interaction.response.send_message("⏹️ Tidak ada lagu yang sedang diputar.", ephemeral=True)
                 return
             action = "resume" if st.is_paused else "pause"
+            uid, _, roles, is_admin, is_owner = _member_context(interaction)
             queue_service.control_playback(
                 guild_id=self.guild_id,
                 action=action,
-                actor_id=str(interaction.user.id),
-                is_admin=True,
-                is_owner=True,
+                actor_id=uid,
+                user_roles=roles,
+                is_admin=is_admin,
+                is_owner=is_owner,
+                dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
             )
             await bot.apply_web_control(self.guild_id, action)
             await interaction.response.edit_message(
@@ -1994,12 +1998,16 @@ def build_discord_bot(
             if not st.current_track and not st.queue:
                 await interaction.response.send_message("📭 Antrean musik sedang kosong.", ephemeral=True)
                 return
+            uid, _, roles, is_admin, is_owner = _member_context(interaction)
             queue_service.control_playback(
                 guild_id=self.guild_id,
                 action="skip",
-                actor_id=str(interaction.user.id),
-                is_admin=True,
-                is_owner=True,
+                actor_id=uid,
+                user_roles=roles,
+                is_admin=is_admin,
+                is_owner=is_owner,
+                dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
             )
             await bot.apply_web_control(self.guild_id, "skip")
             await interaction.response.edit_message(
@@ -2008,12 +2016,16 @@ def build_discord_bot(
             )
 
         async def _on_stop(self, interaction: discord.Interaction) -> None:
+            uid, _, roles, is_admin, is_owner = _member_context(interaction)
             queue_service.control_playback(
                 guild_id=self.guild_id,
                 action="stop",
-                actor_id=str(interaction.user.id),
-                is_admin=True,
-                is_owner=True,
+                actor_id=uid,
+                user_roles=roles,
+                is_admin=is_admin,
+                is_owner=is_owner,
+                dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
             )
             await bot.apply_web_control(self.guild_id, "stop")
             stop_emb = _make_embed(
@@ -2028,12 +2040,16 @@ def build_discord_bot(
             st = queue_service.get_state(self.guild_id)
             cycle = {"off": "queue", "queue": "one", "one": "off"}
             next_mode = cycle.get(st.loop_mode, "off")
+            uid, _, roles, is_admin, is_owner = _member_context(interaction)
             queue_service.control_playback(
                 guild_id=self.guild_id,
                 action="loop",
-                actor_id=str(interaction.user.id),
-                is_admin=True,
-                is_owner=True,
+                actor_id=uid,
+                user_roles=roles,
+                is_admin=is_admin,
+                is_owner=is_owner,
+                dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
                 value=next_mode,
             )
             await bot._notify_web(self.guild_id)
@@ -2050,12 +2066,16 @@ def build_discord_bot(
                     ephemeral=True,
                 )
                 return
+            uid, _, roles, is_admin, is_owner = _member_context(interaction)
             queue_service.control_playback(
                 guild_id=self.guild_id,
                 action="shuffle",
-                actor_id=str(interaction.user.id),
-                is_admin=True,
-                is_owner=True,
+                actor_id=uid,
+                user_roles=roles,
+                is_admin=is_admin,
+                is_owner=is_owner,
+                dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
             )
             await bot._notify_web(self.guild_id)
             await interaction.response.edit_message(
@@ -2066,12 +2086,16 @@ def build_discord_bot(
         async def _on_vol_down(self, interaction: discord.Interaction) -> None:
             st = queue_service.get_state(self.guild_id)
             new_vol = max(10, st.volume - 10)
+            uid, _, roles, is_admin, is_owner = _member_context(interaction)
             queue_service.control_playback(
                 guild_id=self.guild_id,
                 action="volume",
-                actor_id=str(interaction.user.id),
-                is_admin=True,
-                is_owner=True,
+                actor_id=uid,
+                user_roles=roles,
+                is_admin=is_admin,
+                is_owner=is_owner,
+                dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
                 value=new_vol,
             )
             await bot.apply_web_control(self.guild_id, "volume", new_vol)
@@ -2083,12 +2107,16 @@ def build_discord_bot(
         async def _on_vol_up(self, interaction: discord.Interaction) -> None:
             st = queue_service.get_state(self.guild_id)
             new_vol = min(100, st.volume + 10)
+            uid, _, roles, is_admin, is_owner = _member_context(interaction)
             queue_service.control_playback(
                 guild_id=self.guild_id,
                 action="volume",
-                actor_id=str(interaction.user.id),
-                is_admin=True,
-                is_owner=True,
+                actor_id=uid,
+                user_roles=roles,
+                is_admin=is_admin,
+                is_owner=is_owner,
+                dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
                 value=new_vol,
             )
             await bot.apply_web_control(self.guild_id, "volume", new_vol)
@@ -2242,6 +2270,11 @@ def build_discord_bot(
                         requester_id=uid,
                         requester_name=uname,
                         play_now=(idx == 0 and (st_check.current_track is None or replace_seed)),
+                        user_roles=roles,
+                        is_admin=is_admin,
+                        is_owner=is_owner,
+                        dj_role_id=settings.dj_role_id,
+                        has_dj_role=settings.dj_role_id in roles,
                     )
                     if started:
                         started_first = True
@@ -2318,6 +2351,11 @@ def build_discord_bot(
             requester_id=uid,
             requester_name=uname,
             play_now=should_play_now,
+            user_roles=roles,
+            is_admin=is_admin,
+            is_owner=is_owner,
+            dj_role_id=settings.dj_role_id,
+            has_dj_role=settings.dj_role_id in roles,
         )
 
         st = queue_service.get_state(guild_id)
@@ -2503,6 +2541,7 @@ def build_discord_bot(
                 is_admin=is_admin,
                 is_owner=is_owner,
                 dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
             )
             await bot._notify_web(guild_id)
             emb = _make_embed(
@@ -2535,6 +2574,7 @@ def build_discord_bot(
                 is_admin=is_admin,
                 is_owner=is_owner,
                 dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
             )
             asyncio.create_task(bot.apply_web_control(guild_id, "skip"))
             st = queue_service.get_state(guild_id)
@@ -2564,6 +2604,7 @@ def build_discord_bot(
                 is_admin=is_admin,
                 is_owner=is_owner,
                 dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
             )
             asyncio.create_task(bot.apply_web_control(guild_id, "pause"))
             emb = _make_embed(
@@ -2592,6 +2633,7 @@ def build_discord_bot(
                 is_admin=is_admin,
                 is_owner=is_owner,
                 dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
             )
             asyncio.create_task(bot.apply_web_control(guild_id, "resume"))
             emb = _make_embed(
@@ -2620,6 +2662,7 @@ def build_discord_bot(
                 is_admin=is_admin,
                 is_owner=is_owner,
                 dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
             )
             asyncio.create_task(bot.apply_web_control(guild_id, "stop"))
             emb = _make_embed(
@@ -2648,6 +2691,7 @@ def build_discord_bot(
                 is_admin=is_admin,
                 is_owner=is_owner,
                 dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
             )
             await bot._notify_web(guild_id)
             emb = _make_embed(
@@ -2676,6 +2720,7 @@ def build_discord_bot(
                 is_admin=is_admin,
                 is_owner=is_owner,
                 dj_role_id=settings.dj_role_id,
+                has_dj_role=settings.dj_role_id in roles,
                 value=persen,
             )
             await bot.apply_web_control(guild_id, "volume", persen)
@@ -2724,8 +2769,27 @@ def build_discord_bot(
     @bot.tree.command(name="autoplay", description="Aktifkan/nonaktifkan pemutaran lagu lanjutan otomatis saat antrean habis")
     async def cmd_autoplay(interaction: discord.Interaction, aktif: bool) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
+        uid, uname, roles, is_admin, is_owner = _member_context(interaction)
         st = queue_service.get_state(guild_id)
+        allowed, reason = check_host_lock_permission(
+            user_id=uid,
+            user_roles=roles,
+            is_admin=is_admin,
+            is_owner=is_owner,
+            session_host_id=st.host_user_id,
+            dj_role_id=settings.dj_role_id,
+            action="autoplay",
+            has_dj_role=settings.dj_role_id in roles,
+        )
+        if not allowed:
+            await interaction.response.send_message(
+                embed=_make_embed(title="🔒 Akses Ditolak", description=reason, color=0xEF4444),
+                ephemeral=True,
+            )
+            return
         st.autoplay = bool(aktif)
+        if not st.autoplay:
+            queue_service.prefetched_autoplay.pop(guild_id, None)
         await bot._notify_web(guild_id)
         emb = _make_embed(
             title=f"📻 Autoplay: {'AKTIF' if aktif else 'NONAKTIF'}",
@@ -2738,7 +2802,24 @@ def build_discord_bot(
     @bot.tree.command(name="247", description="Pertahankan koneksi bot di voice channel selama 24/7")
     async def cmd_247(interaction: discord.Interaction, aktif: bool) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
+        uid, uname, roles, is_admin, is_owner = _member_context(interaction)
         st = queue_service.get_state(guild_id)
+        allowed, reason = check_host_lock_permission(
+            user_id=uid,
+            user_roles=roles,
+            is_admin=is_admin,
+            is_owner=is_owner,
+            session_host_id=st.host_user_id,
+            dj_role_id=settings.dj_role_id,
+            action="mode_247",
+            has_dj_role=settings.dj_role_id in roles,
+        )
+        if not allowed:
+            await interaction.response.send_message(
+                embed=_make_embed(title="🔒 Akses Ditolak", description=reason, color=0xEF4444),
+                ephemeral=True,
+            )
+            return
         st.mode_247 = bool(aktif)
         if aktif:
             await bot.ensure_voice_connected(guild_id, st.voice_channel_id, str(interaction.user.id))
@@ -2803,6 +2884,7 @@ def build_discord_bot(
             session_host_id=st.host_user_id,
             dj_role_id=settings.dj_role_id,
             action="stop",
+            has_dj_role=settings.dj_role_id in roles,
         )
         if not allowed:
             await interaction.response.send_message(
@@ -2820,6 +2902,7 @@ def build_discord_bot(
             is_admin=True,
             is_owner=True,
             dj_role_id=settings.dj_role_id,
+            has_dj_role=settings.dj_role_id in roles,
         )
         bot._playback_gen[guild_id] = bot._playback_gen.get(guild_id, 0) + 1
         bot._active_vc_track_id.pop(guild_id, None)

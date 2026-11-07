@@ -875,6 +875,7 @@ class AcademyService:
         """
         Menyinkronkan daftar VEVENT ke tabel tasks tanpa duplikasi (berdasarkan guild_id + external_uid).
         - Tugas yang sudah lewat deadline langsung dihapus dari DB dan tidak pernah di-input kembali.
+        OPTIMIZED: Bulk fetch existing tasks to avoid N+1 queries.
         """
         self.ensure_guild_exists(guild_id)
         current_dt = datetime.now(timezone.utc)
@@ -885,7 +886,18 @@ class AcademyService:
         inserted = 0
         updated = 0
 
+        # OPTIMIZATION: Bulk fetch all existing external_uids in one query
+        existing_tasks = {}
         with self.db.transaction() as conn:
+            if parsed:
+                uids = [ev.uid for ev in parsed]
+                placeholders = ",".join("?" * len(uids))
+                rows = conn.execute(
+                    f"SELECT task_id, external_uid, deadline_iso, title, description FROM tasks WHERE guild_id = ? AND external_uid IN ({placeholders})",
+                    (guild_id, *uids),
+                ).fetchall()
+                existing_tasks = {row["external_uid"]: row for row in rows}
+
             for ev in parsed:
                 # Double check: jika sudah lewat deadline, pastikan terhapus dari DB dan jangan di-insert
                 if is_deadline_expired(ev.deadline_iso, now=current_dt):
@@ -895,10 +907,7 @@ class AcademyService:
                     )
                     continue
 
-                existing = conn.execute(
-                    "SELECT task_id, deadline_iso, title, description FROM tasks WHERE guild_id = ? AND external_uid = ?",
-                    (guild_id, ev.uid),
-                ).fetchone()
+                existing = existing_tasks.get(ev.uid)
 
                 if existing is None:
                     task_id = f"tsk-{uuid.uuid4().hex[:10]}"

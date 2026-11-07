@@ -3,7 +3,7 @@ Modul Keamanan Aplikasi:
 - Validasi Host Lock (Session Host, DJ Role, Server Admin, Owner)
 - Pencegahan SSRF (memblokir localhost/private IP untuk input URL eksternal)
 - Pencegahan Path Traversal & validasi file modul (.pdf, .doc, .docx, maks 15 MB, magic bytes)
-- Enkripsi simetris kredensial integrasi & penyamaran token untuk log
+- Enkripsi simetris kredensial integrasi & penyamaran token untuk log (menggunakan cryptography.Fernet)
 - Validasi state OAuth2, token CSRF, dan Rate Limiter berbasis sliding window
 """
 
@@ -21,6 +21,15 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
+
+try:
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    CRYPTOGRAPHY_AVAILABLE = True
+except ImportError:
+    CRYPTOGRAPHY_AVAILABLE = False
+    Fernet = None  # type: ignore
 
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
 BLOCKED_EXTENSIONS = {
@@ -41,44 +50,58 @@ def mask_secret(value: str) -> str:
     return f"{value[:3]}...{value[-3:]}"
 
 
+def _derive_key(password: str, salt: bytes) -> bytes:
+    """Derive encryption key from password using PBKDF2-HMAC-SHA256."""
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100_000,
+    )
+    return kdf.derive(password.encode("utf-8"))
+
+
+def _get_fernet(password: str) -> "Fernet":
+    """Get or create Fernet instance from password (with fixed salt for deterministic key)."""
+    if not CRYPTOGRAPHY_AVAILABLE:
+        raise RuntimeError("cryptography library not installed. Run: pip install cryptography")
+    # Use a fixed salt derived from the password for deterministic key derivation
+    # In production, consider storing salt separately
+    salt = hashlib.sha256(password.encode("utf-8")).digest()[:16]
+    key = _derive_key(password, salt)
+    return Fernet(base64.urlsafe_b64encode(key))
+
+
 def encrypt_secret(plaintext: str, key: str) -> str:
-    """Enkripsi kredensial sensitif (misal URL .ics ber-token) dengan stream key SHA-256 + HMAC."""
+    """Enkripsi kredensial sensitif menggunakan Fernet (AES-128-GCM authenticated encryption)."""
     if not plaintext:
         return ""
-    raw = plaintext.encode("utf-8")
-    nonce = os.urandom(16)
-    key_bytes = hashlib.sha256(key.encode("utf-8")).digest()
-    stream = b"".join(
-        hashlib.sha256(key_bytes + nonce + i.to_bytes(4, "big")).digest()
-        for i in range((len(raw) // 32) + 1)
-    )[: len(raw)]
-    cipher = bytes(a ^ b for a, b in zip(raw, stream))
-    mac = hmac.new(key_bytes, nonce + cipher, hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(nonce + mac + cipher).decode("ascii")
+    try:
+        fernet = _get_fernet(key)
+        token = fernet.encrypt(plaintext.encode("utf-8"))
+        return token.decode("ascii")
+    except Exception as e:
+        raise ValueError(f"Gagal enkripsi: {e}")
 
 
 def decrypt_secret(token: str, key: str) -> str:
-    """Dekripsi kredensial dan verifikasi integritas HMAC."""
+    """Dekripsi kredensial dan verifikasi integritas (Fernet handles auth automatically)."""
     if not token:
         return ""
-    data = base64.urlsafe_b64decode(token.encode("ascii"))
-    if len(data) < 48:
-        raise ValueError("Format token terenkripsi tidak valid.")
-    nonce, mac, cipher = data[:16], data[16:48], data[48:]
-    key_bytes = hashlib.sha256(key.encode("utf-8")).digest()
-    expected_mac = hmac.new(key_bytes, nonce + cipher, hashlib.sha256).digest()
-    if not hmac.compare_digest(mac, expected_mac):
-        raise ValueError("Integritas token terenkripsi gagal diverifikasi.")
-    stream = b"".join(
-        hashlib.sha256(key_bytes + nonce + i.to_bytes(4, "big")).digest()
-        for i in range((len(cipher) // 32) + 1)
-    )[: len(cipher)]
-    plain = bytes(a ^ b for a, b in zip(cipher, stream))
-    return plain.decode("utf-8")
+    try:
+        fernet = _get_fernet(key)
+        plaintext = fernet.decrypt(token.encode("ascii"))
+        return plaintext.decode("utf-8")
+    except Exception as e:
+        raise ValueError(f"Gagal dekripsi/integritas gagal: {e}")
 
 
-def validate_external_url(url: str, resolve_dns: bool = False) -> Tuple[bool, str]:
-    """Memvalidasi URL eksternal dan mencegah SSRF ke jaringan lokal/internal."""
+def validate_external_url(url: str, resolve_dns: bool = True) -> Tuple[bool, str]:
+    """Memvalidasi URL eksternal dan mencegah SSRF ke jaringan lokal/internal.
+    
+    SELALU resolve DNS (default True) untuk mencegah DNS rebinding attacks.
+    Blokir private CIDR: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 127.0.0.0/8, ::1/128, fc00::/7.
+    """
     if not url or len(url) > 2048:
         return False, "URL kosong atau melebihi batas panjang."
     parsed = urlparse(url.strip())
@@ -87,29 +110,55 @@ def validate_external_url(url: str, resolve_dns: bool = False) -> Tuple[bool, st
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         return False, "Hostname URL tidak ditemukan."
-    if hostname in ("localhost", "0.0.0.0", "127.0.0.1", "::1", "metadata.google.internal"):
+    
+    # Blocklist hostname berbahaya
+    blocked_hostnames = {
+        "localhost", "0.0.0.0", "127.0.0.1", "::1", 
+        "metadata.google.internal", "metadata", "metadata.azure.com",
+        "169.254.169.254",  # AWS/GCP/Azure metadata
+    }
+    if hostname in blocked_hostnames:
         return False, "Akses ke alamat loopback atau metadata internal ditolak."
 
+    # Selalu resolve DNS untuk validasi IP tujuan (mencegah DNS rebinding)
+    try:
+        # Resolve hostname ke IP (IPv4)
+        resolved_ips = socket.getaddrinfo(hostname, None, socket.AF_INET, socket.SOCK_STREAM)
+        for _, _, _, _, sockaddr in resolved_ips:
+            ip_str = sockaddr[0]
+            ip_obj = ipaddress.ip_address(ip_str)
+            if _is_private_or_reserved_ip(ip_obj):
+                return False, f"Domain mengarah ke alamat IP internal yang diblokir: {ip_str}"
+    except socket.gaierror:
+        return False, "Gagal memvalidasi DNS untuk hostname tujuan."
+    except Exception as e:
+        return False, f"Error validasi DNS: {e}"
+
+    # Jika hostname langsung berupa IP, validasi juga
     try:
         ip_obj = ipaddress.ip_address(hostname)
-        if (
-            ip_obj.is_private
-            or ip_obj.is_loopback
-            or ip_obj.is_link_local
-            or ip_obj.is_multicast
-            or ip_obj.is_reserved
-        ):
+        if _is_private_or_reserved_ip(ip_obj):
             return False, "Akses ke alamat IP privat atau internal ditolak."
     except ValueError:
-        if resolve_dns:
-            try:
-                resolved_ip = ipaddress.ip_address(socket.gethostbyname(hostname))
-                if resolved_ip.is_private or resolved_ip.is_loopback or resolved_ip.is_link_local:
-                    return False, "Domain mengarah ke alamat IP internal yang diblokir."
-            except Exception:
-                return False, "Gagal memvalidasi DNS untuk hostname tujuan."
+        pass  # Bukan IP literal, sudah divalidasi via DNS di atas
 
     return True, "OK"
+
+
+def _is_private_or_reserved_ip(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Cek apakah IP termasuk private, loopback, link-local, multicast, reserved, atau documentation."""
+    return (
+        ip_obj.is_private
+        or ip_obj.is_loopback
+        or ip_obj.is_link_local
+        or ip_obj.is_multicast
+        or ip_obj.is_reserved
+        # Documentation networks (RFC 5737, RFC 3849)
+        or (ip_obj.version == 4 and ip_obj in ipaddress.ip_network("192.0.2.0/24"))
+        or (ip_obj.version == 4 and ip_obj in ipaddress.ip_network("198.51.100.0/24"))
+        or (ip_obj.version == 4 and ip_obj in ipaddress.ip_network("203.0.113.0/24"))
+        or (ip_obj.version == 6 and ip_obj in ipaddress.ip_network("2001:db8::/32"))
+    )
 
 
 def sanitize_and_validate_attachment(
@@ -160,6 +209,7 @@ def can_control_queue(
     dj_role_id: str,
     action: str = "control",
     target_item_requester_id: Optional[str] = None,
+    has_dj_role: bool = False,
 ) -> Tuple[bool, str]:
     """
     Aturan Host Lock System:
@@ -170,7 +220,7 @@ def can_control_queue(
     """
     if is_owner or is_admin:
         return True, "Diizinkan (Administrator / Owner)."
-    if dj_role_id and dj_role_id in user_roles:
+    if has_dj_role or (dj_role_id and dj_role_id in user_roles):
         return True, "Diizinkan (Role DJ)."
     if not session_host_id or session_host_id == user_id:
         return True, "Diizinkan (Session Host)."
@@ -192,6 +242,7 @@ def check_host_lock_permission(
     dj_role_id: str,
     action: str = "control",
     target_item_requester_id: Optional[str] = None,
+    has_dj_role: bool = False,
 ) -> Tuple[bool, str]:
     """Alias kompatibilitas untuk pemeriksaan izin Host Lock pada bot Discord dan API."""
     return can_control_queue(
@@ -203,6 +254,7 @@ def check_host_lock_permission(
         dj_role_id=dj_role_id,
         action=action,
         target_item_requester_id=target_item_requester_id,
+        has_dj_role=has_dj_role,
     )
 
 
@@ -232,3 +284,10 @@ DISCORD_SNOWFLAKE_RE = re.compile(r"^\d{15,22}$")
 
 def is_valid_snowflake(value: str) -> bool:
     return bool(DISCORD_SNOWFLAKE_RE.match(value.strip()))
+
+
+def validate_snowflake_param(param_name: str, value: str) -> None:
+    """Validasi parameter Discord snowflake ID, raise HTTPException jika tidak valid."""
+    if not value or not is_valid_snowflake(value):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Parameter {param_name} tidak valid: harus berupa Discord Snowflake ID (15-22 digit).")

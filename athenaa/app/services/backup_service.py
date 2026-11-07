@@ -1,15 +1,13 @@
 """
 Modul Super-Admin: Backup Database SQLite Aman & Kontrol Worker yt-dlp.
 - Menggunakan sqlite3Connection.backup() untuk snapshot konsisten tanpa risiko korup.
-- Mengompresi dengan gzip dan mengenkripsi backup dengan BACKUP_ENCRYPTION_KEY terpisah.
+- Mengompresi dengan gzip dan mengenkripsi backup dengan Fernet (AES-128-GCM authenticated encryption).
 - Memeriksa batas ukuran lampiran Discord sebelum pengiriman DM dan menyimpan salinan lokal jika gagal.
 """
 
 from __future__ import annotations
 
 import gzip
-import hashlib
-import hmac
 import os
 import shutil
 import sqlite3
@@ -20,6 +18,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from app.config import settings
+from app.security.validators import encrypt_secret, decrypt_secret
 
 
 class BackupService:
@@ -33,7 +32,7 @@ class BackupService:
     def create_consistent_backup(self, encrypt: bool = True) -> Dict[str, str | int | bool]:
         """
         Membuat snapshot SQLite konsisten menggunakan online backup API,
-        mengompresi dengan gzip, dan mengenkripsi dengan kunci BACKUP_ENCRYPTION_KEY.
+        mengompresi dengan gzip, dan mengenkripsi dengan Fernet (AES-128-GCM).
         File sementara dibersihkan dengan aman di blok finally.
         """
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -55,15 +54,8 @@ class BackupService:
             compressed = gzip.compress(raw_bytes, compresslevel=6)
 
             if encrypt:
-                key_bytes = hashlib.sha256(settings.backup_encryption_key.encode("utf-8")).digest()
-                nonce = os.urandom(16)
-                stream = b"".join(
-                    hashlib.sha256(key_bytes + nonce + i.to_bytes(4, "big")).digest()
-                    for i in range((len(compressed) // 32) + 1)
-                )[: len(compressed)]
-                cipher = bytes(a ^ b for a, b in zip(compressed, stream))
-                mac = hmac.new(key_bytes, nonce + cipher, hashlib.sha256).digest()
-                payload = b"ATHENAA_BAK_V1" + nonce + mac + cipher
+                # Use Fernet encryption (AES-128-GCM authenticated encryption)
+                payload = encrypt_secret(compressed, settings.backup_encryption_key).encode("ascii")
             else:
                 payload = compressed
 

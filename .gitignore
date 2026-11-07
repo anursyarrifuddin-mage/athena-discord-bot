@@ -166,3 +166,4 @@ temp/
 # !athenaa/app/
 # !public/
 # !index.html
+*.zip

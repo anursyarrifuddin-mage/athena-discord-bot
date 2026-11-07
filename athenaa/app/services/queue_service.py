@@ -228,6 +228,7 @@ class QueueService:
         is_admin: bool = False,
         is_owner: bool = False,
         dj_role_id: str = "",
+        has_dj_role: bool = False,
         is_autoplay: bool = False,
     ) -> Tuple[QueueItemModel, bool]:
         state = self.get_state(guild_id)
@@ -249,6 +250,7 @@ class QueueService:
                 session_host_id=state.host_user_id,
                 dj_role_id=dj_role_id,
                 action="play_now",
+                has_dj_role=has_dj_role,
             )
             if not allowed:
                 raise PermissionError(reason)
@@ -533,6 +535,7 @@ class QueueService:
         is_admin: bool = False,
         is_owner: bool = False,
         dj_role_id: str = "",
+        has_dj_role: bool = False,
     ) -> QueueItemModel:
         state = self.get_state(guild_id)
         self._touch_activity(guild_id)
@@ -548,6 +551,7 @@ class QueueService:
             session_host_id=state.host_user_id,
             dj_role_id=dj_role_id,
             action="play_now",
+            has_dj_role=has_dj_role,
         )
         if not allowed:
             raise PermissionError(reason)
@@ -574,6 +578,7 @@ class QueueService:
         is_admin: bool = False,
         is_owner: bool = False,
         dj_role_id: str = "",
+        has_dj_role: bool = False,
     ) -> QueueItemModel:
         state = self.get_state(guild_id)
         self._touch_activity(guild_id)
@@ -590,6 +595,7 @@ class QueueService:
             dj_role_id=dj_role_id,
             action="remove_item",
             target_item_requester_id=target.requester_id,
+            has_dj_role=has_dj_role,
         )
         if not allowed:
             raise PermissionError(reason)
@@ -608,6 +614,7 @@ class QueueService:
         is_admin: bool = False,
         is_owner: bool = False,
         dj_role_id: str = "",
+        has_dj_role: bool = False,
     ) -> QueueItemModel:
         state = self.get_state(guild_id)
         self._touch_activity(guild_id)
@@ -619,6 +626,7 @@ class QueueService:
             session_host_id=state.host_user_id,
             dj_role_id=dj_role_id,
             action="move_to_top",
+            has_dj_role=has_dj_role,
         )
         if not allowed:
             raise PermissionError(reason)
@@ -642,6 +650,7 @@ class QueueService:
         is_owner: bool = False,
         dj_role_id: str = "",
         value: Optional[int | str | bool] = None,
+        has_dj_role: bool = False,
     ) -> GuildQueueState:
         state = self.get_state(guild_id)
         self._touch_activity(guild_id)
@@ -653,6 +662,7 @@ class QueueService:
             session_host_id=state.host_user_id,
             dj_role_id=dj_role_id,
             action=action,
+            has_dj_role=has_dj_role,
         )
         if not allowed:
             raise PermissionError(reason)

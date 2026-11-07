@@ -226,12 +226,24 @@ CREATE TABLE IF NOT EXISTS discord_sessions (
 );
 `);
 
-const MAIN_GUILD_ID = (process.env.MAIN_GUILD_ID || '1428666546942902294').trim();
-const OWNER_DISCORD_ID = (process.env.OWNER_DISCORD_ID || '844174494099701780').trim();
+const MAIN_GUILD_ID = process.env.MAIN_GUILD_ID?.trim() || '';
+const OWNER_DISCORD_ID = process.env.OWNER_DISCORD_ID?.trim() || '';
+
+// Validasi environment variables wajib pada startup
+if (!MAIN_GUILD_ID) {
+  console.error('[FATAL] MAIN_GUILD_ID tidak di-set di environment variables');
+  process.exit(1);
+}
+if (!OWNER_DISCORD_ID) {
+  console.error('[FATAL] OWNER_DISCORD_ID tidak di-set di environment variables');
+  process.exit(1);
+}
+
+// Owner account info - HANYA dari environment, TIDAK ada default hardcoded
 const REAL_OWNER_ACCOUNT = {
   user_id: OWNER_DISCORD_ID,
-  username: 'Aetheriaaa',
-  discord_tag: '@filisim',
+  username: process.env.OWNER_USERNAME?.trim() || 'Bot Owner',
+  discord_tag: process.env.OWNER_DISCORD_TAG?.trim() || '@owner',
   role_label: 'Bot Owner & Session Host',
   is_owner: true,
   has_dj_role: true,

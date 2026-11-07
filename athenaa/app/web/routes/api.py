@@ -50,6 +50,7 @@ from app.database import db_manager
 from app.security.validators import (
     SlidingWindowRateLimiter,
     sanitize_and_validate_attachment,
+    validate_snowflake_param,
 )
 from app.services.academy_service import AcademyService
 from app.services.backup_service import BackupService
@@ -62,7 +63,7 @@ from app.services.music_service import (
     resolve_spotify_link,
     search_songs_with_singer,
 )
-from app.services.queue_service import GuildQueueState, queue_service
+from app.services.queue import GuildQueueState, queue_service
 
 START_TIME = time.time()
 MAX_SESSIONS_PER_USER = 5
@@ -642,6 +643,8 @@ def create_fastapi_app():
     # =========================================================================
     @app.get("/api/auth/session")
     async def api_auth_session(request: Request):
+        # Rate limit session check endpoint
+        _check_auth_rate_limit(request)
         sess = _extract_session(request)
         oauth_ready = bool(settings.discord_client_id and settings.discord_client_secret)
         if sess:
@@ -683,8 +686,21 @@ def create_fastapi_app():
             "oauth_configured": oauth_ready,
         }
 
+    # Rate limiter untuk auth endpoints (stricter: 10 req/min per IP)
+    auth_rate_limiter = SlidingWindowRateLimiter(max_requests=10, window_seconds=60)
+
+
+    def _check_auth_rate_limit(request: Request) -> None:
+        """Check rate limit for auth endpoints based on client IP."""
+        client_ip = request.client.host if request.client else "unknown"
+        if not auth_rate_limiter.allow(f"auth:{client_ip}"):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=429, detail="Terlalu banyak percobaan login. Coba lagi nanti.")
+
+
     @app.post("/api/auth/login")
-    async def api_auth_login():
+    async def api_auth_login(request: Request):
+        _check_auth_rate_limit(request)
         return JSONResponse(
             status_code=403,
             content={
@@ -692,6 +708,7 @@ def create_fastapi_app():
                 "error": "Gunakan tombol Login dengan Discord OAuth2.",
             },
         )
+
 
     @app.post("/api/auth/logout")
     async def api_auth_logout(request: Request):
@@ -776,21 +793,13 @@ def create_fastapi_app():
     @app.get("/invite")
     async def api_discord_bot_invite(request: Request, mode: str = Query("admin")):
         cid = (settings.discord_client_id or "").strip()
-        if not cid and settings.discord_token and "." in settings.discord_token:
-            try:
-                first_part = settings.discord_token.split(".")[0]
-                padded = first_part + "=" * (-len(first_part) % 4)
-                decoded = base64.b64decode(padded).decode("utf-8").strip()
-                if decoded.isdigit():
-                    cid = decoded
-            except Exception:
-                pass
-
+        
+        # DISCORD_CLIENT_ID WAJIB di-set di .env - tidak decode dari token!
         if not cid:
             return JSONResponse(
                 status_code=400,
                 content={
-                    "error": "DISCORD_CLIENT_ID belum diisi pada file .env.",
+                    "error": "DISCORD_CLIENT_ID belum diisi pada file .env. Wajib di-set untuk invite URL.",
                 },
             )
 
@@ -811,7 +820,9 @@ def create_fastapi_app():
 
     @app.get("/auth/callback")
     @app.get("/auth/callback/")
-    async def discord_oauth_callback(code: str = Query("")):
+    async def discord_oauth_callback(request: Request, code: str = Query("")):
+        # Rate limit OAuth callback
+        _check_auth_rate_limit(request)
         if not code or not settings.discord_client_id or not settings.discord_client_secret:
             return HTMLResponse("<h3>Parameter OAuth2 Discord tidak lengkap.</h3>", status_code=400)
 
@@ -849,14 +860,54 @@ def create_fastapi_app():
             utag = f"@{raw_username}" if disc == "0" else f"{raw_username}#{disc}"
             is_owner = uid == settings.owner_discord_id
 
+            # Fetch user's guilds to check for DJ role
+            has_dj_role = is_owner  # Default to owner
+            is_admin = is_owner
+            role_label = "Bot Owner & Session Host" if is_owner else "Discord Member (Verified OAuth2)"
+
+            if not is_owner and settings.main_guild_id:
+                try:
+                    guilds_req = urllib.request.Request(
+                        "https://discord.com/api/users/@me/guilds",
+                        headers={"Authorization": f"Bearer {access_token}", "User-Agent": "AthenaaBot/1.0"},
+                    )
+                    with urllib.request.urlopen(guilds_req, timeout=10.0) as gresp:
+                        guilds_data = json.loads(gresp.read().decode("utf-8"))
+
+                    for guild in guilds_data:
+                        if str(guild.get("id", "")) == str(settings.main_guild_id):
+                            # User is in the main guild, check for DJ role via member endpoint
+                            try:
+                                member_req = urllib.request.Request(
+                                    f"https://discord.com/api/users/@me/guilds/{settings.main_guild_id}/member",
+                                    headers={"Authorization": f"Bearer {access_token}", "User-Agent": "AthenaaBot/1.0"},
+                                )
+                                with urllib.request.urlopen(member_req, timeout=10.0) as mresp:
+                                    member_data = json.loads(mresp.read().decode("utf-8"))
+
+                                user_roles = member_data.get("roles", [])
+                                if settings.dj_role_id and settings.dj_role_id in user_roles:
+                                    has_dj_role = True
+                                    role_label = "Discord Member (DJ Role)"
+                                # Check for admin permissions
+                                permissions = int(member_data.get("permissions", "0"))
+                                if permissions & 0x8:  # Administrator permission
+                                    is_admin = True
+                                    role_label = "Discord Member (Administrator)"
+                            except Exception:
+                                pass
+                            break
+                except Exception:
+                    pass
+
             issued = _issue_single_discord_session(
                 user_id=uid,
                 username=uname,
                 discord_tag=utag,
-                role_label="Bot Owner & Session Host" if is_owner else "Discord Member (Verified OAuth2)",
+                role_label=role_label,
                 is_owner=is_owner,
-                has_dj_role=is_owner,
-                is_admin=is_owner,
+                has_dj_role=has_dj_role,
+                is_admin=is_admin,
             )
 
             token_str = issued["session_token"]
@@ -1048,10 +1099,14 @@ def create_fastapi_app():
 
     @app.get("/api/guilds/{guild_id}/music/state")
     async def api_music_state(guild_id: str):
+        # Validate guild_id is a valid Discord snowflake
+        validate_snowflake_param("guild_id", guild_id)
         return _serialize_music_state(guild_id)
 
     @app.post("/api/guilds/{guild_id}/music/play")
     async def api_music_play(guild_id: str, request: Request):
+        # Validate guild_id is a valid Discord snowflake
+        validate_snowflake_param("guild_id", guild_id)
         body = await request.json()
         sess = _extract_session(request)
         requester_id = sess["user"]["id"] if sess else str(body.get("requester_id", "guest"))
@@ -1087,6 +1142,7 @@ def create_fastapi_app():
         raw_source_url = str(body.get("source_url", "")).strip()
         raw_source_type = str(body.get("source_type", "spotify_matched")).strip()
         play_now_flag = bool(body.get("play_now", False))
+        has_dj_role = sess["user"]["hasDjRole"] if sess else bool(body.get("has_dj_role", False))
 
         try:
             input_kind = ""
@@ -1121,6 +1177,7 @@ def create_fastapi_app():
                         is_admin=is_admin,
                         is_owner=is_owner,
                         dj_role_id=settings.dj_role_id,
+                        has_dj_role=has_dj_role,
                     )
                     if idx == 0:
                         first_item = item_added
@@ -1151,6 +1208,7 @@ def create_fastapi_app():
                 is_admin=is_admin,
                 is_owner=is_owner,
                 dj_role_id=settings.dj_role_id,
+                has_dj_role=has_dj_role,
             )
             return {
                 "item": asdict(item),
@@ -1162,11 +1220,14 @@ def create_fastapi_app():
 
     @app.post("/api/guilds/{guild_id}/music/control")
     async def api_music_control(guild_id: str, request: Request):
+        # Validate guild_id is a valid Discord snowflake
+        validate_snowflake_param("guild_id", guild_id)
         body = await request.json()
         sess = _extract_session(request)
         actor_id = sess["user"]["id"] if sess else str(body.get("actor_id", ""))
         is_owner = sess["user"]["isOwner"] if sess else bool(body.get("is_owner", False))
         is_admin = sess["user"]["isAdmin"] if sess else bool(body.get("is_admin", False))
+        has_dj_role = sess["user"]["hasDjRole"] if sess else bool(body.get("has_dj_role", False))
         action = str(body.get("action", ""))
         item_id = str(body.get("item_id", ""))
 
@@ -1180,6 +1241,7 @@ def create_fastapi_app():
                     is_admin=is_admin,
                     is_owner=is_owner,
                     dj_role_id=settings.dj_role_id,
+                    has_dj_role=has_dj_role,
                 )
             elif action == "remove_item":
                 queue_service.remove_item(
@@ -1190,6 +1252,7 @@ def create_fastapi_app():
                     is_admin=is_admin,
                     is_owner=is_owner,
                     dj_role_id=settings.dj_role_id,
+                    has_dj_role=has_dj_role,
                 )
             elif action == "move_to_top":
                 queue_service.move_to_top(
@@ -1200,6 +1263,7 @@ def create_fastapi_app():
                     is_admin=is_admin,
                     is_owner=is_owner,
                     dj_role_id=settings.dj_role_id,
+                    has_dj_role=has_dj_role,
                 )
             else:
                 queue_service.control_session(
@@ -1211,6 +1275,7 @@ def create_fastapi_app():
                     is_owner=is_owner,
                     dj_role_id=settings.dj_role_id,
                     value=body.get("value"),
+                    has_dj_role=has_dj_role,
                 )
             return {"ok": True, "state": _serialize_music_state(guild_id)}
         except (PermissionError, KeyError, ValueError) as exc:
@@ -1287,6 +1352,8 @@ def create_fastapi_app():
 
     @app.get("/api/guilds/{guild_id}/tasks")
     async def api_get_tasks(guild_id: str):
+        # Validate guild_id is a valid Discord snowflake
+        validate_snowflake_param("guild_id", guild_id)
         # list_tasks otomatis menjalankan purge_expired_tasks(guild_id) terlebih dahulu
         tasks = [asdict(t) for t in academy_service.list_tasks(guild_id, include_completed=True)]
         with db_manager.transaction() as conn:
@@ -1351,6 +1418,8 @@ def create_fastapi_app():
     @app.post("/api/guilds/{guild_id}/tasks/sync-ics")
     @app.post("/api/guilds/{guild_id}/tasks/sync-moodle")
     async def api_sync_moodle(guild_id: str, request: Request):
+        # Validate guild_id is a valid Discord snowflake
+        validate_snowflake_param("guild_id", guild_id)
         try:
             body = await request.json()
         except Exception:
@@ -1490,7 +1559,15 @@ def create_fastapi_app():
             raise HTTPException(status_code=404, detail="Modul tidak ditemukan.")
 
         row_data = dict(row)
-        stored_name = Path(str(row_data.get("stored_filename") or f"{attachment_id}.pdf")).name
+        stored_name = str(row_data.get("stored_filename") or f"{attachment_id}.pdf")
+        
+        # SECURITY: Validate stored_filename to prevent path traversal
+        # Must be safe filename: only alphanumeric, dash, underscore, dot, and valid UUID pattern
+        import re
+        safe_filename_pattern = re.compile(r'^[a-f0-9]{32}\.(pdf|doc|docx)$', re.IGNORECASE)
+        if not safe_filename_pattern.match(stored_name):
+            raise HTTPException(status_code=400, detail="Nama file tidak valid.")
+        
         orig_name = str(row_data.get("original_filename") or stored_name or "modul.pdf")
         mime_type = str(row_data.get("mime_type") or "application/pdf")
         uploader = str(row_data.get("uploaded_by") or "Aetheriaaa")
@@ -1508,6 +1585,18 @@ def create_fastapi_app():
         )
 
         for fp in candidate_paths:
+            # SECURITY: Ensure resolved path is within allowed directory
+            try:
+                fp_resolved = fp.resolve()
+                # Check if path is within BASE_DIR or modules_dir
+                base_resolved = BASE_DIR.resolve()
+                modules_resolved = Path(settings.modules_dir).resolve() if getattr(settings, "modules_dir", None) else None
+                if not (str(fp_resolved).startswith(str(base_resolved)) or 
+                        (modules_resolved and str(fp_resolved).startswith(str(modules_resolved)))):
+                    continue
+            except Exception:
+                continue
+                
             if fp.is_file() and fp.stat().st_size > 0:
                 return FileResponse(
                     path=str(fp),
@@ -1529,6 +1618,8 @@ def create_fastapi_app():
 
     @app.get("/api/guilds/{guild_id}/rpg")
     async def api_guild_rpg(guild_id: str):
+        # Validate guild_id is a valid Discord snowflake
+        validate_snowflake_param("guild_id", guild_id)
         return {
             "leaderboard": leveling_service.get_leaderboard(guild_id, limit=15),
             "afk_list": leveling_service.list_afk(guild_id),
@@ -1589,6 +1680,8 @@ def create_fastapi_app():
 
     @app.post("/api/guilds/{guild_id}/afk")
     async def api_set_afk(guild_id: str, request: Request):
+        # Validate guild_id is a valid Discord snowflake
+        validate_snowflake_param("guild_id", guild_id)
         body = await request.json()
         sess = _extract_session(request)
         uid = sess["user"]["id"] if sess else str(body.get("user_id") or settings.owner_discord_id)
@@ -1603,6 +1696,8 @@ def create_fastapi_app():
 
     @app.delete("/api/guilds/{guild_id}/afk/{user_id}")
     async def api_clear_afk(guild_id: str, user_id: str):
+        # Validate guild_id is a valid Discord snowflake
+        validate_snowflake_param("guild_id", guild_id)
         leveling_service.clear_afk(guild_id, user_id)
         return {"ok": True}
 

@@ -72,8 +72,8 @@ class AppConfig:
         default_factory=lambda: _clean_env("DISCORD_REDIRECT_URI", "https://athenaa.my.id/auth/callback")
     )
 
-    main_guild_id: str = field(default_factory=lambda: _clean_env("MAIN_GUILD_ID", "1428666546942902294"))
-    owner_discord_id: str = field(default_factory=lambda: _clean_env("OWNER_DISCORD_ID", "844174494099701780"))
+    main_guild_id: str = field(default_factory=lambda: _clean_env("MAIN_GUILD_ID"))
+    owner_discord_id: str = field(default_factory=lambda: _clean_env("OWNER_DISCORD_ID"))
     dj_role_id: str = field(default_factory=lambda: _clean_env("DJ_ROLE_ID", "role-dj"))
     task_reminder_channel_id: str = field(
         default_factory=lambda: (
