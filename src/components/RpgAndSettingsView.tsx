@@ -7,8 +7,6 @@ import {
   Shield,
   Database,
   RefreshCw,
-  Download,
-  Code2,
   CheckCircle2,
   Terminal,
   Mic,
@@ -22,7 +20,7 @@ import { AfkEntry, GuildSettings, LevelProfile } from '../types/athenaa';
 import { SLASH_COMMANDS_LIST } from '../utils/slashCommandsData';
 
 interface RpgAndSettingsViewProps {
-  subTab: 'rpg' | 'afk' | 'settings' | 'admin' | 'codebase';
+  subTab: 'rpg' | 'afk' | 'settings' | 'admin';
   guildId: string;
   sessionToken: string;
   isOwner: boolean;
@@ -67,11 +65,6 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
   const [ytdlpStatus, setYtdlpStatus] = useState<Record<string, unknown> | null>(null);
   const [adminBusy, setAdminBusy] = useState(false);
 
-  const [pyFiles, setPyFiles] = useState<Array<{ path: string; role: string }>>([]);
-  const [selectedPyFile, setSelectedPyFile] = useState('app/main.py');
-  const [pyRole, setPyRole] = useState('');
-  const [pyContent, setPyContent] = useState('');
-
   useEffect(() => {
     if (guildSettings) {
       setMusicCh(guildSettings.music_channel_id);
@@ -88,10 +81,11 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
 
   const loadAdminMetrics = async () => {
     if (!isOwner) return;
-    const resp = await fetch(`/api/admin/metrics?role=admin`, {
+    const resp = await fetch(`/api/admin/metrics?role=admin&guild_id=${encodeURIComponent(guildId)}`, {
       headers: {
         Authorization: `Bearer ${sessionToken}`,
         'X-Actor-Role': 'admin',
+        'X-Guild-Id': guildId,
       },
     });
     if (resp.ok) {
@@ -99,30 +93,11 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
     }
   };
 
-  const loadPythonFile = async (filePath: string) => {
-    if (!isOwner) return;
-    const resp = await fetch(`/api/python-codebase?file=${encodeURIComponent(filePath)}&role=admin`, {
-      headers: {
-        Authorization: `Bearer ${sessionToken}`,
-        'X-Actor-Role': 'admin',
-      },
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      setPyFiles(data.files || []);
-      setSelectedPyFile(data.selected_file);
-      setPyRole(data.selected_role);
-      setPyContent(data.content);
-    }
-  };
-
   useEffect(() => {
     if (subTab === 'admin' && isOwner) {
       loadAdminMetrics();
-    } else if (subTab === 'codebase' && isOwner) {
-      loadPythonFile(selectedPyFile);
     }
-  }, [subTab, isOwner, sessionToken]);
+  }, [subTab, isOwner, sessionToken, guildId]);
 
   if (subTab === 'rpg') {
     const expSources = [
@@ -697,6 +672,18 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
   }
 
   if (subTab === 'admin') {
+    if (!isOwner) {
+      return (
+        <div className="bg-[#181818] border border-rose-800/40 rounded-xl p-8 text-center space-y-2">
+          <Shield className="w-8 h-8 text-rose-400 mx-auto" />
+          <h2 className="text-base font-bold text-white">Akses Ditolak — Khusus Admin Server</h2>
+          <p className="text-xs text-[#B3B3B3] max-w-md mx-auto">
+            Admin Server Hub hanya dapat diakses oleh pengguna dengan role Admin Server pada server Discord yang sedang dipilih.
+          </p>
+        </div>
+      );
+    }
+
     const backups = (metrics?.backups as Array<Record<string, unknown>>) || [];
     return (
       <div className="space-y-5">
@@ -705,7 +692,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
                 <Shield className="w-4 h-4 text-[#DC95FF]" />
-                Admin Server Hub (Khusus Administrator Server)
+                Admin Server Hub (Khusus Administrator Server Ini)
               </h2>
               <p className="text-xs text-[#B3B3B3] mt-0.5">
                 Metrik diukur langsung dari proses aplikasi saat ini beserta fitur cadangan data terenkripsi.
@@ -724,6 +711,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                         'Content-Type': 'application/json',
                         Authorization: `Bearer ${sessionToken}`,
                         'X-Actor-Role': 'admin',
+                        'X-Guild-Id': guildId,
                       },
                       body: JSON.stringify({ is_admin: true }),
                     });
@@ -756,6 +744,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                         'Content-Type': 'application/json',
                         Authorization: `Bearer ${sessionToken}`,
                         'X-Actor-Role': 'admin',
+                        'X-Guild-Id': guildId,
                       },
                       body: JSON.stringify({ is_admin: true, perform_update: false }),
                     });
@@ -783,6 +772,7 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
                       headers: {
                         Authorization: `Bearer ${sessionToken}`,
                         'X-Actor-Role': 'admin',
+                        'X-Guild-Id': guildId,
                       },
                     });
                     const data = await resp.json();
@@ -870,106 +860,33 @@ const RpgAndSettingsViewComponent: React.FC<RpgAndSettingsViewProps> = ({
             )}
           </div>
         </div>
-      </div>
-    );
-  }
 
-  if (!isOwner) {
-    return (
-      <div className="bg-[#181818] border border-rose-800/40 rounded-xl p-8 text-center space-y-2">
-        <Shield className="w-8 h-8 text-rose-400 mx-auto" />
-        <h2 className="text-base font-bold text-white">Akses Ditolak — Khusus Admin Server</h2>
-        <p className="text-xs text-[#B3B3B3] max-w-md mx-auto">
-          Kode sumber Bot Python (<code className="font-mono">/athenaa</code>), unduhan paket{' '}
-          <code className="font-mono">.zip</code>, dan Admin Server Hub hanya dapat diakses oleh role Admin Server.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-5">
-      <div className="bg-[#181818] border border-white/5 rounded-xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
-            <Code2 className="w-4 h-4 text-[#DC95FF]" />
-            Kode Sumber Lengkap Bot Python (<code className="font-mono">/athenaa</code>) & Paket Deploy Pterodactyl
-          </h2>
-          <p className="text-xs text-[#B3B3B3] mt-1">
-            Seluruh modul Bot Discord, API Web Player, Lirik Otomatis, dan Kalender Akademik Waskita telah terintegrasi dan siap dijalankan pada VPS atau Pterodactyl.
-          </p>
-        </div>
-
-        <a
-          href={`/api/python-codebase/download-zip?session_token=${encodeURIComponent(sessionToken)}&role=admin`}
-          download="athenaa-discord-bot.zip"
-          className="px-4 py-2 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs flex items-center justify-center gap-2 shrink-0 whitespace-nowrap"
-        >
-          <Download className="w-4 h-4" />
-          Unduh Paket Bot Python (.zip)
-        </a>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        <div className="lg:col-span-4 bg-[#181818] border border-white/5 rounded-xl p-4 space-y-1">
-          <div className="text-xs font-bold text-white px-2 pb-2 border-b border-white/10">
-            Struktur Modul Proyek <code className="font-mono">athenaa/</code>
-          </div>
-          {pyFiles.map((f) => (
-            <button
-              key={f.path}
-              type="button"
-              onClick={() => loadPythonFile(f.path)}
-              className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors ${
-                selectedPyFile === f.path
-                  ? 'bg-[#282828] text-[#DC95FF] font-semibold'
-                  : 'text-[#B3B3B3] hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <div className="font-mono">{f.path}</div>
-              <div className="text-[11px] text-[#B3B3B3] truncate mt-0.5">{f.role}</div>
-            </button>
-          ))}
-        </div>
-
-        <div className="lg:col-span-8 bg-[#181818] border border-white/5 rounded-xl overflow-hidden flex flex-col">
-          <div className="px-5 py-3.5 border-b border-white/10 bg-[#242424] flex items-center justify-between">
-            <div>
-              <span className="font-mono text-xs font-bold text-[#DC95FF]">
-                athenaa/{selectedPyFile}
-              </span>
-              <p className="text-xs text-[#B3B3B3] mt-0.5">{pyRole}</p>
-            </div>
-          </div>
-          <pre className="p-4 sm:p-5 text-xs font-mono text-white/90 overflow-x-auto max-h-[540px] leading-relaxed">
-            {pyContent}
-          </pre>
-        </div>
-      </div>
-
-      <div className="bg-[#181818] border border-white/5 rounded-xl p-5 sm:p-6 space-y-4">
-        <h3 className="text-base font-bold text-white">
-          Daftar Lengkap Discord Slash Commands & Addon Mahasiswa/Minigames (<code className="font-mono">app/bot/client.py</code>)
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {SLASH_COMMANDS_LIST.map((cmd) => (
-            <div
-              key={cmd.name}
-              className="p-3.5 rounded-xl bg-[#242424] space-y-1"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <code className="font-mono text-xs font-bold text-[#DC95FF]">
-                  {cmd.name} {cmd.params}
-                </code>
-                <span className="text-[11px] text-[#B3B3B3] shrink-0">{cmd.category}</span>
+        <div className="bg-[#181818] border border-white/5 rounded-xl p-5 sm:p-6 space-y-4">
+          <h3 className="text-base font-bold text-white">
+            Daftar Lengkap Discord Slash Commands & Addon Mahasiswa/Minigames
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {SLASH_COMMANDS_LIST.map((cmd) => (
+              <div
+                key={cmd.name}
+                className="p-3.5 rounded-xl bg-[#242424] space-y-1"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <code className="font-mono text-xs font-bold text-[#DC95FF]">
+                    {cmd.name} {cmd.params}
+                  </code>
+                  <span className="text-[11px] text-[#B3B3B3] shrink-0">{cmd.category}</span>
+                </div>
+                <p className="text-xs text-white/80">{cmd.description}</p>
               </div>
-              <p className="text-xs text-white/80">{cmd.description}</p>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  }
+
+  return null;
 };
 
 export const RpgAndSettingsView = React.memo(RpgAndSettingsViewComponent);

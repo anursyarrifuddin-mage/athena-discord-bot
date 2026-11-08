@@ -228,6 +228,23 @@ const AcademyAndModulesViewComponent: React.FC<AcademyAndModulesViewProps> = ({
     }
   };
 
+  const handleDeleteModule = async (attachmentId: string, filename: string) => {
+    try {
+      const resp = await fetch(`/api/guilds/${guildId}/modules/${attachmentId}`, {
+        method: 'DELETE',
+      });
+      if (resp.ok) {
+        onNotify(`Modul / lampiran "${filename}" berhasil dihapus.`);
+        onRefreshTasks();
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        onNotify(data.error || data.detail || 'Gagal menghapus modul.', true);
+      }
+    } catch {
+      onNotify('Terjadi kesalahan jaringan saat menghapus modul.', true);
+    }
+  };
+
   const handleUploadModule = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFile && !uploadFilename.trim()) {
@@ -438,7 +455,7 @@ const AcademyAndModulesViewComponent: React.FC<AcademyAndModulesViewProps> = ({
                 Daftar Modul & Lampiran Tersedia ({attachments.length})
               </h2>
               <p className="text-xs text-[#B3B3B3] mt-1">
-                Hanya pengguna terautentikasi di server terkait yang dapat mengunduh file modul.
+                Hanya pengguna terautentikasi di server terkait yang dapat mengunduh atau menghapus file modul.
               </p>
             </div>
 
@@ -465,14 +482,25 @@ const AcademyAndModulesViewComponent: React.FC<AcademyAndModulesViewProps> = ({
                         · Diunggah oleh {att.uploaded_by}
                       </div>
                     </div>
-                    <a
-                      href={`/api/modules/${att.attachment_id}/download`}
-                      download={att.original_filename}
-                      className="px-3.5 py-1.5 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-xs font-semibold text-white flex items-center justify-center gap-1.5 shrink-0 self-start sm:self-auto"
-                    >
-                      <Download className="w-3.5 h-3.5 text-[#DC95FF]" />
-                      Unduh
-                    </a>
+                    <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+                      <a
+                        href={`/api/modules/${att.attachment_id}/download`}
+                        download={att.original_filename}
+                        className="px-3.5 py-1.5 rounded-full bg-[#282828] hover:bg-[#3E3E3E] text-xs font-semibold text-white flex items-center justify-center gap-1.5 transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5 text-[#DC95FF]" />
+                        Unduh
+                      </a>
+                      <button
+                        type="button"
+                        aria-label={`Hapus modul ${att.original_filename}`}
+                        onClick={() => handleDeleteModule(att.attachment_id, att.original_filename)}
+                        className="px-3.5 py-1.5 rounded-full bg-[#282828] hover:bg-rose-900/60 text-xs font-semibold text-[#B3B3B3] hover:text-rose-200 flex items-center justify-center gap-1.5 transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                        Hapus
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -739,6 +767,37 @@ const AcademyAndModulesViewComponent: React.FC<AcademyAndModulesViewProps> = ({
                       </div>
                       {task.description && (
                         <p className="text-xs text-[#B3B3B3] pt-0.5">{task.description}</p>
+                      )}
+                      {attachments.some((a) => a.task_id === task.task_id) && (
+                        <div className="flex flex-wrap items-center gap-2 pt-1.5">
+                          {attachments
+                            .filter((a) => a.task_id === task.task_id)
+                            .map((att) => (
+                              <div
+                                key={att.attachment_id}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#242424] border border-white/10 text-[11px] text-white"
+                              >
+                                <FileText className="w-3 h-3 text-[#DC95FF] shrink-0" />
+                                <a
+                                  href={`/api/modules/${att.attachment_id}/download`}
+                                  download={att.original_filename}
+                                  className="hover:text-[#DC95FF] truncate max-w-[180px] font-medium"
+                                  title={`Unduh ${att.original_filename}`}
+                                >
+                                  {att.original_filename}
+                                </a>
+                                <button
+                                  type="button"
+                                  aria-label={`Hapus lampiran ${att.original_filename}`}
+                                  onClick={() => handleDeleteModule(att.attachment_id, att.original_filename)}
+                                  className="ml-0.5 p-0.5 rounded hover:bg-rose-500/20 text-[#B3B3B3] hover:text-rose-300 transition-colors"
+                                  title={`Hapus lampiran ${att.original_filename}`}
+                                >
+                                  <Trash2 className="w-3 h-3 text-rose-400" />
+                                </button>
+                              </div>
+                            ))}
+                        </div>
                       )}
                     </div>
 

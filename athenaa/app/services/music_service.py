@@ -295,15 +295,130 @@ class TrackCandidate:
 
 
 # ==============================================================================
-# Pembersih Judul & Base-Song Deduplicator
+# Deteksi Versi Lagu (Original vs DJ / Remix / Slowed / Sped Up / Koplo / Cover)
+# & Pembersih Judul Tanpa Menghapus Tag Versi
 # ==============================================================================
-# Hanya menghapus tag di dalam kurung (...) / [...] atau setelah tanda '|' / '//'
-YOUTUBE_JUNK_BRACKET_RE = re.compile(
-    r"\s*(?:"
-    r"[\(\[\{][^)\]\}]*?(?:official|lyric|lirik|video|audio|mv|visualizer|live|performance|hd|hq|4k|remastered|terbaru|lagu|clip|ost|soundtrack|karaoke|sub\s*indo|eng\s*sub)[^)\]\}]*?[\)\]\}]|"
-    r"\|.*$|"
-    r"//.*$"
-    r")",
+VERSION_CATEGORY_PATTERNS: List[Tuple[str, re.Pattern[str]]] = [
+    (
+        "dj",
+        re.compile(
+            r"\b(dj|jedag\s*jedug|jj|full\s*bass|bass\s*boosted|bassboost|funkot|breakbeat|mengkane|thai\s*style|kane)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "remix",
+        re.compile(
+            r"\b(remix|remixed|rmx|bootleg|flip|mashup|vip\s*mix|club\s*mix|extended\s*mix|house\s*mix|disco\s*mix|dutch\s*mix)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "slowed",
+        re.compile(
+            r"\b(slowed|reverb|slow\s*version|slow\s*reverb)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "sped_up",
+        re.compile(
+            r"\b(sped\s*up|speed\s*up|nightcore|daycore)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "koplo",
+        re.compile(
+            r"\b(koplo|dangdut|pongdut|gendang|kendang|adella|palapa|monata|ageng\s*music)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "acoustic",
+        re.compile(
+            r"\b(acoustic|akustik)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "cover",
+        re.compile(
+            r"\b(cover|ai\s*cover)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "live",
+        re.compile(
+            r"\b(live\s*version|live\s*session|live\s*performance|live\s*at|live\s*from|konser|concert)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "instrumental",
+        re.compile(
+            r"\b(instrumental|karaoke|minus\s*one|backing\s*track)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "8d",
+        re.compile(
+            r"\b(8d|8d\s*audio)\b",
+            re.IGNORECASE,
+        ),
+    ),
+]
+
+
+def detect_version_modifiers(text: str) -> Set[str]:
+    """
+    Mendeteksi apakah kueri/judul mengandung permintaan versi khusus seperti:
+    dj, remix, slowed, sped_up, koplo, acoustic, cover, live, instrumental, 8d.
+    Jika kosong (set()), berarti musik biasa (original studio audio).
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return set()
+    found: Set[str] = set()
+    for cat_name, pattern in VERSION_CATEGORY_PATTERNS:
+        if pattern.search(raw):
+            found.add(cat_name)
+    return found
+
+
+def do_version_modifiers_match(requested_mods: Set[str], candidate_mods: Set[str]) -> bool:
+    """
+    Memvalidasi kesesuaian versi lagu antara input pengguna/link dengan kandidat video:
+    - Jika pengguna TIDAK meminta versi khusus (requested_mods kosong -> musik biasa),
+      maka kandidat yang memiliki tag DJ/Remix/Slowed/Koplo/Cover/dll WAJIB ditolak (False).
+    - Jika pengguna MEMINTA versi khusus (mis. DJ / Remix / Slowed),
+      maka kandidat musik biasa (candidate_mods kosong) WAJIB ditolak (False),
+      dan kandidat harus cocok dengan kategori versi yang diminta.
+    """
+    if not requested_mods:
+        return len(candidate_mods) == 0
+    if not candidate_mods:
+        return False
+
+    for req in requested_mods:
+        if req in ("dj", "remix"):
+            if not ({"dj", "remix"} & candidate_mods):
+                return False
+        else:
+            if req not in candidate_mods:
+                return False
+    return True
+
+
+PURE_JUNK_WORDS_RE = re.compile(
+    r"\b(?:"
+    r"official\s*(?:music\s*)?(?:video|audio|lyric\s*video|lyrics?|mv|visualizer)|"
+    r"music\s*video|lyric\s*video|video\s*lirik|video\s*klip|video\s*clip|"
+    r"full\s*lirik|with\s*lyrics|audio\s*only|official\s*audio|official\s*video|"
+    r"official|visualizer|mv|m/v|hd|hq|4k|remastered|sub\s*indo|eng\s*sub"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -317,15 +432,39 @@ YOUTUBE_TRAILING_TAG_RE = re.compile(
 
 VERSION_MODIFIERS_RE = re.compile(
     r"\b("
-    r"remix|remixed|slowed|slow|reverb|sped\s*up|speed\s*up|nightcore|daycore|"
-    r"dj|bass\s*boosted|bassboost|jedag\s*jedug|jj|tiktok|douyin|viral|trend|trending|"
+    r"remix|remixed|rmx|slowed|slow|reverb|sped\s*up|speed\s*up|nightcore|daycore|"
+    r"dj|bass\s*boosted|bassboost|full\s*bass|jedag\s*jedug|jj|funkot|breakbeat|mengkane|thai\s*style|"
+    r"tiktok|douyin|viral|trend|trending|"
     r"version|ver|ori|original|edit|bootleg|flip|mashup|mix|extended|radio\s*edit|"
-    r"acoustic|akustik|live|cover|koplo|dangdut|instrumental|karaoke|"
+    r"acoustic|akustik|live|cover|koplo|dangdut|pongdut|instrumental|karaoke|8d|"
     r"official|audio|video|music|lyrics?|lirik|lagu|terbaru|ost|soundtrack|theme|song|"
     r"prod|feat|ft|with|by|x"
     r")\b",
     re.IGNORECASE,
 )
+
+
+def _clean_bracket_or_pipe_segment(match: re.Match[str]) -> str:
+    """
+    Membersihkan tanda kurung (...) / [...] / {...} di judul YouTube:
+    - Jika di dalam kurung hanya berisi tag sampah seperti (Official Audio), (Official Music Video), (Lyrics), hapus seluruhnya.
+    - Jika di dalam kurung berisi modifier versi seperti (DJ Remix Official Audio) atau (Slowed + Reverb),
+      pertahankan modifier versinya menjadi (DJ Remix) / (Slowed + Reverb)!
+    """
+    full_str = match.group(0)
+    inner = full_str.strip()
+    if inner and inner[0] in "([{" and inner[-1] in ")]}":
+        inner = inner[1:-1].strip()
+    mods = detect_version_modifiers(inner)
+    if not mods:
+        if PURE_JUNK_WORDS_RE.search(inner) or re.search(r"\b(lyrics?|lirik|audio|video|terbaru|lagu|ost|soundtrack|clip)\b", inner, re.IGNORECASE):
+            return ""
+        return full_str
+    cleaned_inner = PURE_JUNK_WORDS_RE.sub("", inner)
+    cleaned_inner = re.sub(r"\s{2,}", " ", cleaned_inner).strip(" -–—|:·.,/")
+    if not cleaned_inner:
+        return ""
+    return f" ({cleaned_inner})"
 
 
 def _normalize_casing(text: str) -> str:
@@ -334,7 +473,7 @@ def _normalize_casing(text: str) -> str:
         return s
     letters = [c for c in s if c.isalpha() and c.isascii()]
     if len(letters) >= 4 and all(c.isupper() for c in letters):
-        if s.upper() in ("SZA", "RAN", "SO7", "BCL", "GAC", "BTS", "NIKI", "TXT", "OST"):
+        if s.upper() in ("SZA", "RAN", "SO7", "BCL", "GAC", "BTS", "NIKI", "TXT", "OST", "DJ"):
             return s.upper()
         return s.title()
     return s
@@ -351,8 +490,25 @@ def _clean_youtube_title_and_artist(raw_title: str, channel_name: str) -> Tuple[
         flags=re.IGNORECASE,
     ).strip()
 
+    # Tangani bagian setelah '|' atau '//' — pertahankan jika mengandung DJ/Remix/Slowed/dll, hapus jika hanya tag sampah
+    for pipe_sep in ("|", "//"):
+        if pipe_sep in cleaned_title:
+            parts_pipe = [p.strip() for p in cleaned_title.split(pipe_sep) if p.strip()]
+            if len(parts_pipe) >= 2:
+                head_part = parts_pipe[0]
+                tail_mods = [
+                     PURE_JUNK_WORDS_RE.sub("", p).strip(" -–—|:·.")
+                    for p in parts_pipe[1:]
+                    if detect_version_modifiers(p)
+                ]
+                tail_mods = [t for t in tail_mods if t]
+                if tail_mods and not detect_version_modifiers(head_part):
+                    cleaned_title = f"{head_part} ({' '.join(tail_mods)})"
+                else:
+                    cleaned_title = head_part
+
     for _ in range(3):
-        cleaned_title = YOUTUBE_JUNK_BRACKET_RE.sub("", cleaned_title).strip(" -–—|:·.")
+        cleaned_title = re.sub(r"\s*[\(\[\{][^)\]\}]*?[\)\]\}]", _clean_bracket_or_pipe_segment, cleaned_title).strip(" -–—|:·.")
         cleaned_title = YOUTUBE_TRAILING_TAG_RE.sub("", cleaned_title).strip(" -–—|:·.")
 
     artist_out = cleaned_channel
@@ -366,17 +522,22 @@ def _clean_youtube_title_and_artist(raw_title: str, channel_name: str) -> Tuple[
             if left and right:
                 if YOUTUBE_TRAILING_TAG_RE.fullmatch(right):
                     song_out = left
+                elif detect_version_modifiers(right) and not detect_version_modifiers(left) and len(right.split()) <= 4 and any(
+                    k in right.lower() for k in ("remix", "slowed", "sped up", "speed up", "reverb", "koplo", "acoustic", "akustik", "cover", "live", "dj", "full bass", "jedag jedug")
+                ):
+                    # Format seperti "One Of The Girls - Slowed & Reverb" atau "Judul Lagu - DJ Remix"
+                    song_out = f"{left} ({right})"
                 else:
                     artist_out = left
                     song_out = right
                 break
 
     for _ in range(2):
-        song_out = YOUTUBE_JUNK_BRACKET_RE.sub("", song_out).strip(" -–—|:·.\"'")
+        song_out = re.sub(r"\s*[\(\[\{][^)\]\}]*?[\)\]\}]", _clean_bracket_or_pipe_segment, song_out).strip(" -–—|:·.\"'")
         song_out = YOUTUBE_TRAILING_TAG_RE.sub("", song_out).strip(" -–—|:·.\"'")
-        artist_out = YOUTUBE_JUNK_BRACKET_RE.sub("", artist_out).strip(" -–—|:·.\"'")
+        artist_out = re.sub(r"\s*[\(\[\{][^)\]\}]*?[\)\]\}]", _clean_bracket_or_pipe_segment, artist_out).strip(" -–—|:·.\"'")
 
-    song_out = re.sub(r"\.{2,}$", "", song_out).strip()
+    song_out = re.sub(r"\s{2,}", " ", re.sub(r"\.{2,}$", "", song_out)).strip()
     song_out = _normalize_casing(song_out) or "Unknown Track"
     artist_out = _normalize_casing(artist_out) or "Spotify Artist"
     return song_out, artist_out
@@ -406,6 +567,16 @@ def normalize_song_identity(title: str, artist: str) -> str:
     return f"{normalize_title_only(title)}::{normalize_artist_only(artist)}"
 
 
+def normalize_exact_version_identity(title: str, artist: str = "") -> str:
+    """
+    Identitas unik lagu yang MEMISAHKAN secara ketat antara versi Original dengan versi DJ/Remix/Slowed/SpedUp/Koplo/Cover.
+    Digunakan pada _TRACK_META_REGISTRY dan deduplikasi hasil pencarian agar lagu biasa dan lagu DJ/Remix tidak pernah tertukar!
+    """
+    mods = sorted(detect_version_modifiers(f"{title or ''} {artist or ''}"))
+    mod_tag = "_".join(mods) if mods else "original"
+    return f"{normalize_title_only(title)}::{normalize_artist_only(artist)}::{mod_tag}"
+
+
 def is_same_base_song(title_1: str, title_2: str) -> bool:
     n1 = normalize_title_only(title_1)
     n2 = normalize_title_only(title_2)
@@ -419,7 +590,7 @@ def is_same_base_song(title_1: str, title_2: str) -> bool:
 
 
 # ==============================================================================
-# Registri Pemetaan Lagu -> Video ID Eksak (Tanpa Overwrite & Tanpa Substring Liar)
+# Registri Pemetaan Lagu -> Video ID Eksak (Memisahkan Original vs DJ/Remix/Slowed!)
 # ==============================================================================
 # LRU Cache dengan max 2000 entry, TTL 1 jam
 _TRACK_META_REGISTRY = LRUCache(max_size=2000, ttl_seconds=3600)
@@ -441,7 +612,7 @@ def _register_track_meta(
 ) -> None:
     """
     HANYA mendaftarkan video_id jika benar-benar berasal dari link video valid (11 karakter),
-    dan hanya menggunakan kunci pasangan (title + artist) yang presisi.
+    dan memisahkan kunci registri berdasarkan versi lagu (original vs dj/remix/slowed) agar tidak pernah tertukar.
     """
     if not title:
         return
@@ -461,18 +632,22 @@ def _register_track_meta(
     if len(vid) != 11:
         vid = ""
 
+    mods = sorted(detect_version_modifiers(f"{title} {artist}"))
+    mod_suffix = "::" + ("_".join(mods) if mods else "original")
+
     meta = {
         "title": clean_t,
         "artist": clean_a,
         "duration_sec": int(duration_sec or 0),
         "video_id": vid,
+        "modifiers": mods,
     }
 
-    exact_pair = re.sub(r"[^\w]+", "", f"{title} {artist}".lower(), flags=re.UNICODE)
-    clean_pair = re.sub(r"[^\w]+", "", f"{clean_t} {clean_a}".lower(), flags=re.UNICODE)
-    slug_raw = _clean_search_slug(f"{title} {artist}").lower()
-    slug_clean = _clean_search_slug(f"{clean_t} {clean_a}").lower()
-    ident_key = normalize_song_identity(clean_t, clean_a)
+    exact_pair = re.sub(r"[^\w]+", "", f"{title} {artist}".lower(), flags=re.UNICODE) + mod_suffix
+    clean_pair = re.sub(r"[^\w]+", "", f"{clean_t} {clean_a}".lower(), flags=re.UNICODE) + mod_suffix
+    slug_raw = _clean_search_slug(f"{title} {artist}").lower() + mod_suffix
+    slug_clean = _clean_search_slug(f"{clean_t} {clean_a}").lower() + mod_suffix
+    ident_key = normalize_exact_version_identity(clean_t, clean_a)
 
     for k in (exact_pair, clean_pair, slug_raw, slug_clean, ident_key):
         if not k:
@@ -489,18 +664,22 @@ def _lookup_registered_meta(query_or_url: str, title: str = "", artist: str = ""
     if raw in _TRACK_META_REGISTRY:
         return _TRACK_META_REGISTRY[raw]
 
+    target_text = f"{raw} {title} {artist}".strip()
+    mods = sorted(detect_version_modifiers(target_text))
+    mod_suffix = "::" + ("_".join(mods) if mods else "original")
+
     slug = _clean_search_slug(raw).lower()
-    if slug in _TRACK_META_REGISTRY:
-        return _TRACK_META_REGISTRY[slug]
+    if (slug + mod_suffix) in _TRACK_META_REGISTRY:
+        return _TRACK_META_REGISTRY[slug + mod_suffix]
 
     alnum_slug = re.sub(r"[^\w]+", "", slug, flags=re.UNICODE)
-    if alnum_slug in _TRACK_META_REGISTRY:
-        return _TRACK_META_REGISTRY[alnum_slug]
+    if (alnum_slug + mod_suffix) in _TRACK_META_REGISTRY:
+        return _TRACK_META_REGISTRY[alnum_slug + mod_suffix]
 
     if title and artist:
         for tk in (
-            re.sub(r"[^\w]+", "", f"{title} {artist}".lower(), flags=re.UNICODE),
-            normalize_song_identity(title, artist),
+            re.sub(r"[^\w]+", "", f"{title} {artist}".lower(), flags=re.UNICODE) + mod_suffix,
+            normalize_exact_version_identity(title, artist),
         ):
             if tk and tk in _TRACK_META_REGISTRY:
                 return _TRACK_META_REGISTRY[tk]
@@ -793,11 +972,14 @@ NON_MUSIC_YOUTUBE_CATEGORIES = {
 
 MUSIC_VIDEO_INDICATOR_RE = re.compile(
     r"\b("
-    r"official\s*music\s*video|music\s*video|video\s*klip|video\s*clip|"
-    r"behind\s*the\s*scene|making\s*of|teaser|trailer"
+    r"official\s*music\s*video|music\s*video|official\s*video|video\s*klip|video\s*clip|"
+    r"official\s*mv|m/v|\bmv\b|behind\s*the\s*scene|making\s*of|teaser|trailer|"
+    r"short\s*film|dance\s*practice|performance\s*video"
     r")\b",
     re.IGNORECASE,
 )
+
+MAX_NORMAL_SONG_DURATION_SEC = 540  # 9 menit maksimum untuk lagu normal utuh (mencegah MV film pendek / kompilasi)
 
 
 def _is_album_or_compilation(raw_title: str, duration_sec: int = 0, channel_name: str = "") -> bool:
@@ -826,8 +1008,8 @@ def _search_youtube_with_views(
 ) -> List[Tuple[int, TrackCandidate]]:
     """
     Mencari single track di YouTube secara thread-safe tanpa konflik event loop.
-    Menyimpan `source_url = https://www.youtube.com/watch?v={video_id}`
-    dengan `source_type = 'spotify_matched'` agar client.py memutar 100% video tersebut tanpa salah lagu!
+    Menjamin kecocokan versi lagu (lagu normal vs DJ/Remix/Slowed/Koplo/Cover) dan memprioritaskan
+    audio murni (Official Audio / - Topic) di atas Music Video (MV).
     """
     cleaned = re.sub(
         r"\b(full\s*album|album\s*lengkap|playlist|kompilasi|nonstop)\b",
@@ -838,16 +1020,24 @@ def _search_youtube_with_views(
     if not cleaned:
         return []
 
+    requested_mods = detect_version_modifiers(cleaned)
+
     if studio_master_only:
         search_term = f'{cleaned} "Provided to YouTube"'
-    elif "audio" not in cleaned.lower() and "remix" not in cleaned.lower() and "slowed" not in cleaned.lower():
-        search_term = f"{cleaned} official audio"
+    elif not requested_mods:
+        if "audio" not in cleaned.lower():
+            search_term = f"{cleaned} official audio"
+        else:
+            search_term = cleaned
     else:
-        search_term = f"{cleaned} audio"
+        # Jika user meminta DJ / Remix / Slowed / Koplo / Cover, jangan tambahkan "official audio"
+        # agar pencarian YouTube tidak dipaksa ke lagu studio original.
+        search_term = cleaned
 
     encoded = urllib.parse.quote(search_term)
     url = f"https://www.youtube.com/results?search_query={encoded}&hl=id&gl=ID"
     scored_results: List[Tuple[int, TrackCandidate]] = []
+    mv_fallback_results: List[Tuple[int, TrackCandidate]] = []
     seen_base_titles: Set[str] = set()
 
     try:
@@ -898,6 +1088,13 @@ def _search_youtube_with_views(
                 duration_sec = _parse_duration_str(dur_text)
                 if duration_sec <= 0 or _is_album_or_compilation(raw_title, duration_sec, raw_channel):
                     continue
+                if not requested_mods and duration_sec > MAX_NORMAL_SONG_DURATION_SEC:
+                    continue
+
+                # Cek kesesuaian versi (normal vs DJ/Remix/Slowed/SpedUp/Koplo/Cover)
+                cand_mods = detect_version_modifiers(f"{raw_title} {raw_channel}")
+                if not do_version_modifiers_match(requested_mods, cand_mods):
+                    continue
 
                 view_str = (
                     vr.get("viewCountText", {}).get("simpleText", "")
@@ -911,51 +1108,60 @@ def _search_youtube_with_views(
                 if _is_album_or_compilation(song_title, duration_sec, artist_name):
                     continue
 
-                base_key = f"{normalize_title_only(song_title)}::{normalize_artist_only(artist_name)}"
+                # Gunakan identitas eksak berbasis versi agar lagu biasa dan DJ/Remix tidak saling menimpa
+                base_key = normalize_exact_version_identity(song_title, artist_name)
                 if base_key in seen_base_titles:
                     continue
-                seen_base_titles.add(base_key)
+
+                is_mv = bool(MUSIC_VIDEO_INDICATOR_RE.search(raw_title)) and "audio" not in raw_title.lower()
 
                 thumb_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
                 direct_watch_url = f"https://www.youtube.com/watch?v={video_id}"
 
-                _register_track_meta(
-                    song_title,
-                    artist_name,
-                    duration_sec,
-                    direct_watch_url,
-                    video_id=video_id,
-                    allow_overwrite=(item_idx == 0),
-                )
-
                 popularity_score = views + max(0, (25 - item_idx) * 150_000)
                 if is_topic_master:
-                    popularity_score += 2_000_000
+                    popularity_score += 3_500_000
                 elif is_official_artist:
+                    popularity_score += 1_500_000
+                if "official audio" in raw_title.lower() or "audio" in raw_title.lower():
                     popularity_score += 1_200_000
-                elif "official audio" in raw_title.lower():
-                    popularity_score += 600_000
-                if MUSIC_VIDEO_INDICATOR_RE.search(raw_title):
-                    popularity_score -= 600_000
+                if is_mv:
+                    popularity_score = max(10_000, popularity_score - 5_000_000)
 
-                scored_results.append(
-                    (
-                        popularity_score,
-                        TrackCandidate(
-                            title=song_title,
-                            artist=artist_name,
-                            album="Spotify Single",
-                            duration_sec=duration_sec,
-                            source_type=default_source_type,
-                            source_url=direct_watch_url,
-                            stream_url="",
-                            thumbnail_url=thumb_url,
-                            notice="Spotify Single Track",
-                        ),
-                    )
+                cand_obj = TrackCandidate(
+                    title=song_title,
+                    artist=artist_name,
+                    album="Spotify Single",
+                    duration_sec=duration_sec,
+                    source_type=default_source_type,
+                    source_url=direct_watch_url,
+                    stream_url="",
+                    thumbnail_url=thumb_url,
+                    notice="Spotify Single Track",
                 )
+
+                if is_mv and not requested_mods:
+                    mv_fallback_results.append((popularity_score, cand_obj))
+                else:
+                    seen_base_titles.add(base_key)
+                    _register_track_meta(
+                        song_title,
+                        artist_name,
+                        duration_sec,
+                        direct_watch_url,
+                        video_id=video_id,
+                        allow_overwrite=(len(scored_results) == 0),
+                    )
+                    scored_results.append((popularity_score, cand_obj))
+
                 if len(scored_results) >= max(limit * 2, 35):
                     break
+
+        if not scored_results and mv_fallback_results:
+            for score_mv, cand_mv in mv_fallback_results[:limit]:
+                v_id = _extract_vid_from_url_or_registry(cand_mv.source_url)
+                _register_track_meta(cand_mv.title, cand_mv.artist, cand_mv.duration_sec, cand_mv.source_url, video_id=v_id)
+                scored_results.append((score_mv, cand_mv))
 
         return scored_results
     except Exception:
@@ -1072,6 +1278,7 @@ def _fetch_live_radio_graph_for_track(
     if not vid:
         return []
 
+    seed_mods = detect_version_modifiers(f"{title} {artist}")
     mix_url = f"https://www.youtube.com/watch?v={vid}&list=RD{vid}&hl=id&gl=ID"
     extracted: List[Tuple[int, TrackCandidate]] = []
 
@@ -1109,6 +1316,12 @@ def _fetch_live_radio_graph_for_track(
 
             dur_sec = _parse_duration_str(dur_str)
             if dur_sec <= 0 or _is_album_or_compilation(raw_t, dur_sec, raw_ch):
+                continue
+            if not seed_mods and dur_sec > MAX_NORMAL_SONG_DURATION_SEC:
+                continue
+
+            cand_mods = detect_version_modifiers(f"{raw_t} {raw_ch}")
+            if not seed_mods and cand_mods:
                 continue
 
             clean_t, clean_a = _clean_youtube_title_and_artist(raw_t, raw_ch)
@@ -1180,6 +1393,12 @@ def _fetch_live_radio_graph_for_track(
 
             dur_sec = _parse_duration_str(dur_str)
             if dur_sec <= 0 or _is_album_or_compilation(raw_t, dur_sec, raw_ch):
+                continue
+            if not seed_mods and dur_sec > MAX_NORMAL_SONG_DURATION_SEC:
+                continue
+
+            cand_mods = detect_version_modifiers(f"{raw_t} {raw_ch}")
+            if not seed_mods and cand_mods:
                 continue
 
             views = _parse_view_count(view_str)
@@ -1337,7 +1556,7 @@ def recommend_autoplay_tracks(
 
     if len(candidate_map) < limit * 2:
         related_search = _search_youtube_with_views(
-            f"{clean_b_artist} {clean_b_title} official audio",
+            f"{clean_b_artist} {clean_b_title}",
             limit=12,
             default_source_type="spotify_matched",
             min_views=MIN_VIRAL_VIEWS_THRESHOLD,
@@ -1406,6 +1625,93 @@ async def recommend_autoplay_tracks_async(
     )
 
 
+def resolve_youtube_link(url_or_id: str) -> Optional[TrackCandidate]:
+    """
+    Memeriksa tautan YouTube secara cerdas sebelum diputar:
+    - Mengekstrak judul asli, channel, dan durasi video dari tautan YouTube.
+    - Jika video tersebut adalah lagu DJ / Remix / Slowed / Sped Up / Koplo / Cover, pertahankan versi & video_id tersebut.
+    - Jika video tersebut adalah Music Video (MV) dari lagu biasa atau berdurasi terlalu panjang (> 9 menit),
+      otomatis cari versi Official Audio / - Topic dari lagu biasa tersebut agar hanya musik utuhnya yang diputar!
+    """
+    raw = (url_or_id or "").strip()
+    yt_m = YOUTUBE_URL_RE.match(raw)
+    vid = yt_m.group(1) if yt_m else (raw if re.fullmatch(r"[A-Za-z0-9_-]{11}", raw) else "")
+    if not vid:
+        return extract_with_ytdlp(raw)
+
+    watch_url = f"https://www.youtube.com/watch?v={vid}"
+    raw_title = ""
+    raw_channel = ""
+    duration_sec = 0
+    thumb_url = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+
+    # 1. Coba inspeksi cepat via YouTube watch HTML / playerResponse atau oEmbed
+    try:
+        page_html = _http_get_text(watch_url, timeout=5.0)
+        vd_m = re.search(r'"videoDetails"\s*:\s*(\{.+?\})\s*,\s*"(?:playerConfig|microformat|storyboards|annotations)"', page_html)
+        if vd_m:
+            vd = json.loads(vd_m.group(1))
+            raw_title = str(vd.get("title") or "").strip()
+            raw_channel = str(vd.get("author") or "").strip()
+            duration_sec = int(vd.get("lengthSeconds") or 0)
+        else:
+            t_m = re.search(r'<meta\s+name="title"\s+content="([^"]+)"', page_html)
+            if t_m:
+                raw_title = html.unescape(t_m.group(1)).strip()
+            a_m = re.search(r'"ownerChannelName"\s*:\s*"([^"]+)"', page_html)
+            if a_m:
+                raw_channel = html.unescape(a_m.group(1)).strip()
+            d_m = re.search(r'"lengthSeconds"\s*:\s*"(\d+)"', page_html)
+            if d_m:
+                duration_sec = int(d_m.group(1))
+    except Exception:
+        pass
+
+    if not raw_title:
+        try:
+            oembed_url = f"https://www.youtube.com/oembed?url={urllib.parse.quote(watch_url, safe='')}&format=json"
+            oembed_json = _http_get_text(oembed_url, timeout=4.0)
+            oembed_data = json.loads(oembed_json)
+            raw_title = str(oembed_data.get("title") or "").strip()
+            raw_channel = str(oembed_data.get("author_name") or "").strip()
+        except Exception:
+            pass
+
+    if not raw_title:
+        cand = extract_with_ytdlp(watch_url)
+        if cand:
+            cand.source_type = "youtube"
+            return cand
+        return None
+
+    clean_title, clean_artist = _clean_youtube_title_and_artist(raw_title, raw_channel or "YouTube Music")
+    vid_mods = detect_version_modifiers(f"{raw_title} {raw_channel}")
+    is_mv = bool(MUSIC_VIDEO_INDICATOR_RE.search(raw_title)) and "audio" not in raw_title.lower()
+
+    # Jika lagu biasa (bukan DJ/Remix/Slowed) tetapi berupa MV atau durasi > 9 menit, arahkan ke Official Audio murni!
+    if not vid_mods and (is_mv or duration_sec > MAX_NORMAL_SONG_DURATION_SEC):
+        pure_query = f"{clean_artist} - {clean_title}" if clean_artist and clean_artist != "Spotify Artist" else clean_title
+        pure_hits = search_youtube_http(pure_query, limit=3, default_source_type="youtube")
+        if pure_hits:
+            best_pure = pure_hits[0]
+            best_pure.source_type = "youtube"
+            return best_pure
+
+    final_dur = duration_sec if duration_sec > 0 else 200
+    _register_track_meta(clean_title, clean_artist, final_dur, watch_url, video_id=vid, allow_overwrite=True)
+    return TrackCandidate(
+        title=clean_title,
+        artist=clean_artist,
+        album="YouTube Audio",
+        duration_sec=final_dur,
+        source_type="youtube",
+        source_url=watch_url,
+        stream_url="",
+        thumbnail_url=thumb_url,
+        notice="YouTube Track",
+    )
+
+
 def search_songs_with_singer(query: str, limit: int = 25) -> List[TrackCandidate]:
     cleaned = (query or "").strip()
     max_items = max(1, min(limit, 30))
@@ -1442,16 +1748,20 @@ def search_songs_with_singer(query: str, limit: int = 25) -> List[TrackCandidate
         except Exception:
             pass
     elif kind == "youtube":
-        cand = extract_with_ytdlp(cleaned)
+        cand = resolve_youtube_link(cleaned)
         if cand:
             cand.source_type = "youtube"
             return [cand]
 
+    requested_mods = detect_version_modifiers(cleaned)
     yt_results = search_youtube_http(cleaned, limit=max_items, default_source_type="spotify_matched")
 
     q_lower = cleaned.lower()
     local_matches: List[TrackCandidate] = []
     for c in CURATED_YOUTUBE_SPOTIFY_CATALOG:
+        c_mods = detect_version_modifiers(f"{c['title']} {c['artist']}")
+        if not do_version_modifiers_match(requested_mods, c_mods):
+            continue
         if (
             q_lower in c["title"].lower()
             or q_lower in c["artist"].lower()
@@ -1473,11 +1783,14 @@ def search_songs_with_singer(query: str, limit: int = 25) -> List[TrackCandidate
 
     combined: List[TrackCandidate] = []
     seen = set()
-    # Prioritaskan hasil pencarian langsung (yang sudah memiliki watch?v=video_id eksak!)
+    # Prioritaskan hasil pencarian langsung (yang sudah memiliki watch?v=video_id eksak dan terfilter versi!)
     for item in [*yt_results, *local_matches]:
         if _is_album_or_compilation(item.title, item.duration_sec, item.artist):
             continue
-        ident = f"{item.title.lower()}::{item.artist.lower()}"
+        item_mods = detect_version_modifiers(f"{item.title} {item.artist}")
+        if not do_version_modifiers_match(requested_mods, item_mods):
+            continue
+        ident = normalize_exact_version_identity(item.title, item.artist)
         if ident not in seen:
             seen.add(ident)
             item.source_type = "spotify_matched"
@@ -1526,6 +1839,9 @@ def resolve_spotify_link(url_or_id: str) -> TrackCandidate:
     """
     Mendukung input berupa URL Spotify utuh ('https://open.spotify.com/track/...')
     MAUPUN ID Spotify 22-karakter ('3w09eeWmgkLz5BISaqcpgm') yang dikirim oleh cmd_play di client.py!
+    Memeriksa judul & artis lagu Spotify terlebih dahulu:
+    - Jika lagu biasa -> cari audio murni lagu biasa (tanpa DJ/Remix/Slowed/MV).
+    - Jika lagu memiliki keterangan DJ / Remix / Slowed / Sped Up / dll -> cari audio sesuai versi tersebut!
     """
     raw = (url_or_id or "").strip()
     if re.fullmatch(r"[A-Za-z0-9]{22}", raw):
@@ -1615,13 +1931,29 @@ def resolve_spotify_link(url_or_id: str) -> TrackCandidate:
     final_dur = duration_sec if duration_sec > 0 else 200
     final_artist = artist or "Spotify Artist"
 
-    search_q = f"{final_artist} - {title} official audio" if final_artist != "Spotify Artist" else f"{title} official audio"
-    matched = search_youtube_http(search_q, limit=2)
+    # Cek apakah lagu di Spotify adalah lagu biasa atau memiliki modifier DJ/Remix/Slowed/dll
+    sp_mods = detect_version_modifiers(f"{title} {final_artist}")
+    if sp_mods:
+        search_q = f"{final_artist} - {title}" if final_artist != "Spotify Artist" else title
+    else:
+        search_q = f"{final_artist} - {title} official audio" if final_artist != "Spotify Artist" else f"{title} official audio"
+
+    matched = search_youtube_http(search_q, limit=4)
     if matched:
         best = matched[0]
+        v_id = _extract_vid_from_url_or_registry(best.source_url, best.title, best.artist)
+        resolved_artist = final_artist if final_artist != "Spotify Artist" else best.artist
+        _register_track_meta(
+            title,
+            resolved_artist,
+            final_dur if duration_sec > 0 else best.duration_sec,
+            best.source_url,
+            video_id=v_id,
+            allow_overwrite=True,
+        )
         return TrackCandidate(
             title=title,
-            artist=final_artist if final_artist != "Spotify Artist" else best.artist,
+            artist=resolved_artist,
             album="Spotify Single",
             duration_sec=final_dur if duration_sec > 0 else best.duration_sec,
             source_type="spotify_matched",
@@ -1714,6 +2046,8 @@ def extract_youtube_playlist_tracks(url_or_list_id: str, max_tracks: int = 50) -
                             dur_s = int(pvr.get("lengthSeconds") or 0) or _parse_duration_str(
                                 str(pvr.get("lengthText", {}).get("simpleText", ""))
                             ) or 200
+                            if _is_album_or_compilation(raw_t, dur_s, raw_ch):
+                                continue
                             clean_t, clean_a = _clean_youtube_title_and_artist(raw_t, raw_ch)
                             thumb = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
                             if not thumbnail:
@@ -1750,7 +2084,9 @@ def extract_youtube_playlist_tracks(url_or_list_id: str, max_tracks: int = 50) -
             pass
 
     if not tracks:
-        fallback_items = search_songs_with_singer("Lagu Pop Indonesia Terbaik", limit=min(15, cap))
+        fallback_items = search_songs_with_singer("Hindia", limit=min(15, cap))
+        if not fallback_items:
+            fallback_items = search_songs_with_singer("", limit=min(15, cap))
         for cand in fallback_items:
             tracks.append(
                 TrackCandidate(
@@ -1862,6 +2198,8 @@ def extract_spotify_playlist_tracks(url_or_id: str, max_tracks: int = 50) -> Dic
             pass
 
         fallback_candidates = search_songs_with_singer(playlist_name, limit=min(15, max_tracks))
+        if not fallback_candidates:
+            fallback_candidates = search_songs_with_singer("", limit=min(15, max_tracks))
         for cand in fallback_candidates:
             if _is_album_or_compilation(cand.title, cand.duration_sec, cand.artist):
                 continue
@@ -1889,7 +2227,8 @@ def extract_spotify_playlist_tracks(url_or_id: str, max_tracks: int = 50) -> Dic
 def _to_safe_ytdlp_target(query_or_url: str, studio_master_mode: bool = False) -> str:
     """
     Mengubah input menjadi target URL video tunggal (https://www.youtube.com/watch?v=VIDEO_ID)
-    agar yt-dlp mengekstrak dalam < 1.5 detik tanpa pernah timeout!
+    agar yt-dlp mengekstrak dalam < 1.5 detik tanpa pernah timeout, serta menjaga kesesuaian
+    versi lagu (original vs DJ/Remix/Slowed)!
     """
     cleaned = (query_or_url or "").strip()
     if not cleaned:
@@ -1922,7 +2261,8 @@ def _to_safe_ytdlp_target(query_or_url: str, studio_master_mode: bool = False) -
             if w and not w.isdigit() and w.lower() not in ("us", "id", "album", "song", "track", "music", "playlist")
         ]
         slug = " ".join(path_words).strip() or "Hindia Evaluasi"
-        return f"ytsearch1:{slug} official audio"
+        req_mods_url = detect_version_modifiers(slug)
+        return f"ytsearch1:{slug}" if req_mods_url else f"ytsearch1:{slug} official audio"
 
     verified_hits = search_youtube_http(slug, limit=3, default_source_type="spotify_matched")
     if verified_hits:
@@ -1934,6 +2274,9 @@ def _to_safe_ytdlp_target(query_or_url: str, studio_master_mode: bool = False) -
         if v_vid and len(v_vid) == 11:
             return f"https://www.youtube.com/watch?v={v_vid}"
 
+    req_mods = detect_version_modifiers(slug)
+    if req_mods:
+        return f"ytsearch1:{slug}"
     return f"ytsearch1:{slug} official audio"
 
 
@@ -2165,9 +2508,9 @@ _PREVIEW_STREAM_CACHE = LRUCache(max_size=400, ttl_seconds=1800)
 def resolve_browser_preview_stream(title: str, artist: str, source_url: str = "") -> Dict[str, Any]:
     """
     Menyediakan stream audio nyata untuk Web Browser Player (<audio>):
-    1. Jika source_url adalah radio langsung (.mp3/.m4a/stream), kembalikan langsung.
-    2. Cari stream audio M4A / AAC berkualitas tinggi untuk pemutaran langsung di browser,
-       atau gunakan hasil ekstraksi yt-dlp bila tersedia.
+    1. Jika lagu adalah lagu biasa (bukan DJ/Remix/Slowed), coba ambil preview M4A dari katalog publik
+       HANYA JIKA versi lagunya juga cocok (tidak mencampur lagu biasa dengan remix/DJ).
+    2. Jika lagu adalah DJ/Remix/Slowed atau tidak ada di katalog preview, ekstrak stream langsung via yt-dlp.
     """
     clean_t = (title or "").strip()
     clean_a = (artist or "").strip()
@@ -2176,7 +2519,9 @@ def resolve_browser_preview_stream(title: str, artist: str, source_url: str = ""
     if cached:
         return dict(cached)
 
-    # 1. Coba ambil stream preview M4A 256kbps dari katalog publik untuk pemutaran instan tanpa blokir CORS
+    req_mods = detect_version_modifiers(f"{clean_t} {clean_a}")
+
+    # 1. Coba ambil stream preview M4A 256kbps dari katalog publik bila versi cocok
     query_str = f"{clean_t} {clean_a}".strip()
     if query_str:
         try:
@@ -2197,21 +2542,27 @@ def resolve_browser_preview_stream(title: str, artist: str, source_url: str = ""
             results = payload.get("results") or []
             for item in results:
                 preview_url = str(item.get("previewUrl") or "").strip()
-                if preview_url:
-                    artwork = str(item.get("artworkUrl100") or "").replace("100x100bb", "600x600bb")
-                    out = {
-                        "stream_url": preview_url,
-                        "thumbnail_url": artwork,
-                        "source": "web_audio_stream",
-                    }
-                    _PREVIEW_STREAM_CACHE.set(cache_key, out)
-                    return dict(out)
+                if not preview_url:
+                    continue
+                it_title = str(item.get("trackName") or "")
+                it_artist = str(item.get("artistName") or "")
+                it_mods = detect_version_modifiers(f"{it_title} {it_artist}")
+                if not do_version_modifiers_match(req_mods, it_mods):
+                    continue
+                artwork = str(item.get("artworkUrl100") or "").replace("100x100bb", "600x600bb")
+                out = {
+                    "stream_url": preview_url,
+                    "thumbnail_url": artwork,
+                    "source": "web_audio_stream",
+                }
+                _PREVIEW_STREAM_CACHE.set(cache_key, out)
+                return dict(out)
         except Exception:
             pass
 
     # 2. Coba yt-dlp jika terpasang di host
     try:
-        target_q = source_url if (source_url and YOUTUBE_URL_RE.match(source_url)) else f"{clean_a} {clean_t}"
+        target_q = source_url if (source_url and YOUTUBE_URL_RE.match(source_url)) else f"{clean_a} - {clean_t}"
         yt_res = extract_playable_stream_ytdlp(target_q)
         if yt_res and yt_res.get("stream_url"):
             out = {

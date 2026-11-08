@@ -19,6 +19,10 @@ import {
   validateAttachmentMeta,
   canAccessOwnerResources,
   enforceSingleDiscordSession,
+  detectVersionModifiers,
+  doVersionModifiersMatch,
+  cleanYoutubeTitleKeepVersion,
+  isUnwantedMusicVideoOrLongTrack,
 } from './src/lib/athenaaRules';
 
 const execFileAsync = promisify(execFile);
@@ -194,24 +198,108 @@ CREATE TABLE IF NOT EXISTS discord_sessions (
     is_admin INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS user_guild_roles (
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, guild_id)
+);
 `);
 
 const MAIN_GUILD_ID = process.env.MAIN_GUILD_ID?.trim() || '1428666546942902294';
 const DEFAULT_ADMIN_ID = '844174494099701780';
 const OWNER_DISCORD_ID = DEFAULT_ADMIN_ID;
 
-// Default Server Admin account for initial session bootstrap (Per-Server Role System: Admin, DJ, Member)
+// Default Server Admin account for initial session bootstrap (Per-Server Role System: Admin Server, Role DJ, Member)
 const REAL_OWNER_ACCOUNT = {
   user_id: DEFAULT_ADMIN_ID,
   username: 'Aetheriaaa',
   discord_tag: '@aetheriaaa',
   role_label: 'Admin Server',
-  is_owner: true,
+  is_owner: false,
   has_dj_role: true,
   is_admin: true,
 };
 
 const activeSessionsByUserId = new Map<string, string>();
+
+function setUserGuildRole(userId: string, guildId: string, role: string) {
+  if (!userId || !guildId) return;
+  const cleanRole = role === 'admin' || role === 'dj' || role === 'member' ? role : 'member';
+  db.prepare(`
+    INSERT INTO user_guild_roles (user_id, guild_id, role, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, guild_id) DO UPDATE SET
+      role = excluded.role,
+      updated_at = excluded.updated_at
+  `).run(userId, guildId, cleanRole, new Date().toISOString());
+}
+
+function getUserGuildRolesMap(userId: string): Record<string, 'admin' | 'dj' | 'member'> {
+  if (!userId) return {};
+  const rows = db
+    .prepare('SELECT guild_id, role FROM user_guild_roles WHERE user_id = ?')
+    .all(userId) as Array<{ guild_id: string; role: string }>;
+  const map: Record<string, 'admin' | 'dj' | 'member'> = {};
+  for (const r of rows) {
+    const roleVal = r.role === 'admin' || r.role === 'dj' ? r.role : 'member';
+    map[String(r.guild_id)] = roleVal;
+  }
+  return map;
+}
+
+function resolveUserRoleForGuild(
+  userId: string,
+  guildId: string,
+  fallbackIsAdmin: boolean,
+  fallbackHasDj: boolean
+): {
+  role: 'admin' | 'dj' | 'member';
+  roleLabel: string;
+  isAdmin: boolean;
+  hasDjRole: boolean;
+  guildRoles: Record<string, 'admin' | 'dj' | 'member'>;
+} {
+  const guildRoles = getUserGuildRolesMap(userId);
+  const targetGid = (guildId || MAIN_GUILD_ID).trim();
+
+  if (targetGid && guildRoles[targetGid]) {
+    const r = guildRoles[targetGid];
+    const isAdm = r === 'admin';
+    const hasDj = r === 'admin' || r === 'dj';
+    return {
+      role: r,
+      roleLabel: isAdm ? 'Admin Server' : hasDj ? 'Role DJ' : 'Member',
+      isAdmin: isAdm,
+      hasDjRole: hasDj,
+      guildRoles,
+    };
+  }
+
+  // Jika user sudah memiliki role di server lain namun belum di server ini, otomatis menjadi Member biasa di server ini
+  if (Object.keys(guildRoles).length > 0 && targetGid && !guildRoles[targetGid]) {
+    return {
+      role: 'member',
+      roleLabel: 'Member',
+      isAdmin: false,
+      hasDjRole: false,
+      guildRoles: { ...guildRoles, [targetGid]: 'member' },
+    };
+  }
+
+  const isAdm = fallbackIsAdmin && (!targetGid || targetGid === MAIN_GUILD_ID);
+  const hasDj = (fallbackHasDj || isAdm) && (!targetGid || targetGid === MAIN_GUILD_ID);
+  const role: 'admin' | 'dj' | 'member' = isAdm ? 'admin' : hasDj ? 'dj' : 'member';
+  return {
+    role,
+    roleLabel: isAdm ? 'Admin Server' : hasDj ? 'Role DJ' : 'Member',
+    isAdmin: isAdm,
+    hasDjRole: hasDj,
+    guildRoles: targetGid ? { ...guildRoles, [targetGid]: role } : guildRoles,
+  };
+}
 
 function issueSingleDiscordSession(account: {
   user_id: string;
@@ -221,6 +309,7 @@ function issueSingleDiscordSession(account: {
   is_owner: boolean;
   has_dj_role: boolean;
   is_admin: boolean;
+  guild_id?: string;
 }) {
   const newToken = `athenaa_sess_${account.user_id}_${crypto.randomBytes(12).toString('hex')}`;
   const { previousTokenRevoked } = enforceSingleDiscordSession(
@@ -229,6 +318,17 @@ function issueSingleDiscordSession(account: {
     newToken
   );
   const nowIso = new Date().toISOString();
+  const targetGid = (account.guild_id || MAIN_GUILD_ID).trim();
+  const roleStr: 'admin' | 'dj' | 'member' = account.is_admin
+    ? 'admin'
+    : account.has_dj_role
+    ? 'dj'
+    : 'member';
+
+  if (targetGid) {
+    setUserGuildRole(account.user_id, targetGid, roleStr);
+  }
+
   db.prepare(`
     INSERT INTO discord_sessions (
       user_id, session_token, username, discord_tag, role_label, is_owner, has_dj_role, is_admin, created_at
@@ -238,7 +338,7 @@ function issueSingleDiscordSession(account: {
       username = excluded.username,
       discord_tag = excluded.discord_tag,
       role_label = excluded.role_label,
-      is_owner = excluded.is_owner,
+      is_owner = 0,
       has_dj_role = excluded.has_dj_role,
       is_admin = excluded.is_admin,
       created_at = excluded.created_at
@@ -248,11 +348,16 @@ function issueSingleDiscordSession(account: {
     account.username,
     account.discord_tag,
     account.role_label,
-    account.is_owner ? 1 : 0,
+    0,
     account.has_dj_role ? 1 : 0,
     account.is_admin ? 1 : 0,
     nowIso
   );
+
+  const guildRoles = getUserGuildRolesMap(account.user_id);
+  if (targetGid && !guildRoles[targetGid]) {
+    guildRoles[targetGid] = roleStr;
+  }
 
   return {
     session_token: newToken,
@@ -261,11 +366,12 @@ function issueSingleDiscordSession(account: {
       id: account.user_id,
       name: account.username,
       discordTag: account.discord_tag,
-      role: account.is_admin ? 'admin' : account.has_dj_role ? 'dj' : 'member',
+      role: roleStr,
       roleLabel: account.role_label,
-      isOwner: account.is_admin,
+      isOwner: false,
       hasDjRole: account.has_dj_role,
       isAdmin: account.is_admin,
+      guildRoles,
     },
   };
 }
@@ -280,7 +386,14 @@ function parseCookieToken(cookieHeader: string): string {
   return '';
 }
 
-function getSessionFromRequest(req: express.Request) {
+function getSessionFromRequest(req: express.Request, explicitGuildId?: string) {
+  const targetGid = String(
+    explicitGuildId ||
+      req.params?.guildId ||
+      req.query?.guild_id ||
+      req.headers['x-guild-id'] ||
+      MAIN_GUILD_ID
+  ).trim();
   const roleOverride = String(req.headers['x-actor-role'] || req.query.role || '')
     .trim()
     .toLowerCase();
@@ -301,6 +414,7 @@ function getSessionFromRequest(req: express.Request) {
       isOwner: boolean;
       hasDjRole: boolean;
       isAdmin: boolean;
+      guildRoles?: Record<string, 'admin' | 'dj' | 'member'>;
     };
   } | null = null;
 
@@ -309,21 +423,34 @@ function getSessionFromRequest(req: express.Request) {
       .prepare('SELECT * FROM discord_sessions WHERE session_token = ?')
       .get(token) as Record<string, unknown> | undefined;
     if (row) {
-      const isAdm = Boolean(row.is_admin) || Boolean(row.is_owner);
-      const hasDj = Boolean(row.has_dj_role) || isAdm;
+      const uid = String(row.user_id);
+      const resolved = resolveUserRoleForGuild(
+        uid,
+        targetGid,
+        Boolean(row.is_admin),
+        Boolean(row.has_dj_role)
+      );
       baseSession = {
         session_token: String(row.session_token),
         user: {
-          id: String(row.user_id),
+          id: uid,
           name: String(row.username),
           discordTag: String(row.discord_tag),
-          role: isAdm ? 'admin' : hasDj ? 'dj' : 'member',
-          roleLabel: String(row.role_label),
-          isOwner: isAdm,
-          hasDjRole: hasDj,
-          isAdmin: isAdm,
+          role: resolved.role,
+          roleLabel: resolved.roleLabel,
+          isOwner: false,
+          hasDjRole: resolved.hasDjRole,
+          isAdmin: resolved.isAdmin,
+          guildRoles: resolved.guildRoles,
         },
       };
+    }
+  }
+
+  if (baseSession && token) {
+    const gMap = baseSession.user.guildRoles || {};
+    if (Object.keys(gMap).length > 0 && targetGid) {
+      return baseSession;
     }
   }
 
@@ -343,10 +470,11 @@ function getSessionFromRequest(req: express.Request) {
           baseSession?.user.discordTag ||
           (isAdm ? '@aetheriaaa' : roleOverride === 'dj' ? '@dj_nyolbar' : '@member_kampus'),
         role: roleOverride,
-        roleLabel: isAdm ? 'Admin Server' : hasDj ? 'DJ Server' : 'Member Server',
-        isOwner: isAdm,
+        roleLabel: isAdm ? 'Admin Server' : hasDj ? 'Role DJ' : 'Member',
+        isOwner: false,
         hasDjRole: hasDj,
         isAdmin: isAdm,
+        guildRoles: targetGid ? { [targetGid]: roleOverride } : {},
       },
     };
   }
@@ -1500,7 +1628,8 @@ async function startServer() {
   // Single-Session Discord Authentication & OAuth2 Routes (1 User = 1 Session)
   // ============================================================================
   app.get('/api/auth/session', (req, res) => {
-    const active = getSessionFromRequest(req);
+    const targetGid = String(req.query.guild_id || req.headers['x-guild-id'] || MAIN_GUILD_ID).trim();
+    const active = getSessionFromRequest(req, targetGid);
     if (active) {
       res.json({
         authenticated: true,
@@ -1516,27 +1645,33 @@ async function startServer() {
       .get() as Record<string, unknown> | undefined;
 
     if (fallbackRow) {
-      const isAdm = Boolean(fallbackRow.is_admin) || Boolean(fallbackRow.is_owner);
-      const hasDj = Boolean(fallbackRow.has_dj_role) || isAdm;
+      const uid = String(fallbackRow.user_id);
+      const resolved = resolveUserRoleForGuild(
+        uid,
+        targetGid,
+        Boolean(fallbackRow.is_admin),
+        Boolean(fallbackRow.has_dj_role)
+      );
       res.json({
         authenticated: true,
         session_token: String(fallbackRow.session_token),
         user: {
-          id: String(fallbackRow.user_id),
+          id: uid,
           name: String(fallbackRow.username),
           discordTag: String(fallbackRow.discord_tag),
-          role: isAdm ? 'admin' : hasDj ? 'dj' : 'member',
-          roleLabel: isAdm ? 'Admin Server' : hasDj ? 'DJ Server' : 'Member Server',
-          isOwner: isAdm,
-          hasDjRole: hasDj,
-          isAdmin: isAdm,
+          role: resolved.role,
+          roleLabel: resolved.roleLabel,
+          isOwner: false,
+          hasDjRole: resolved.hasDjRole,
+          isAdmin: resolved.isAdmin,
+          guildRoles: resolved.guildRoles,
         },
         oauth_configured: Boolean(process.env.DISCORD_CLIENT_ID),
       });
       return;
     }
 
-    const issued = issueSingleDiscordSession(REAL_OWNER_ACCOUNT);
+    const issued = issueSingleDiscordSession({ ...REAL_OWNER_ACCOUNT, guild_id: MAIN_GUILD_ID });
     res.json({
       authenticated: true,
       session_token: issued.session_token,
@@ -1547,27 +1682,35 @@ async function startServer() {
 
   app.post('/api/auth/login', (req, res) => {
     const requestedRole = String(req.body?.role || 'admin').trim().toLowerCase();
-    const isAdm = requestedRole === 'admin';
-    const hasDj = requestedRole === 'admin' || requestedRole === 'dj';
+    const cleanRole =
+      requestedRole === 'admin' || requestedRole === 'dj' || requestedRole === 'member'
+        ? requestedRole
+        : 'member';
+    const targetGid = String(
+      req.body?.guild_id || req.headers['x-guild-id'] || MAIN_GUILD_ID
+    ).trim();
+    const isAdm = cleanRole === 'admin';
+    const hasDj = cleanRole === 'admin' || cleanRole === 'dj';
     const userId = String(
       req.body?.user_id ||
-        (isAdm ? DEFAULT_ADMIN_ID : requestedRole === 'dj' ? 'user-dj-02' : 'user-member-03')
+        (isAdm ? DEFAULT_ADMIN_ID : cleanRole === 'dj' ? 'user-dj-02' : 'user-member-03')
     );
     const username = String(
       req.body?.username ||
-        (isAdm ? 'Aetheriaaa' : requestedRole === 'dj' ? 'DJ NyolBar' : 'Member Kampus')
+        (isAdm ? 'Aetheriaaa' : cleanRole === 'dj' ? 'DJ NyolBar' : 'Member Kampus')
     );
-    const discordTag = isAdm ? '@aetheriaaa' : requestedRole === 'dj' ? '@dj_nyolbar' : '@member_kampus';
-    const roleLabel = isAdm ? 'Admin Server' : hasDj ? 'DJ Server' : 'Member Server';
+    const discordTag = isAdm ? '@aetheriaaa' : cleanRole === 'dj' ? '@dj_nyolbar' : '@member_kampus';
+    const roleLabel = isAdm ? 'Admin Server' : hasDj ? 'Role DJ' : 'Member';
 
     const issued = issueSingleDiscordSession({
       user_id: userId,
       username,
       discord_tag: discordTag,
       role_label: roleLabel,
-      is_owner: isAdm,
+      is_owner: false,
       has_dj_role: hasDj,
       is_admin: isAdm,
+      guild_id: targetGid,
     });
 
     res.setHeader(
@@ -2063,13 +2206,92 @@ async function startServer() {
       return;
     }
 
-    const qLower = query.toLowerCase();
-    const localMatches = CURATED_CATALOG.filter(
-      (item) =>
+    let effectiveQuery = query;
+    // Jika input berupa link Spotify Track tunggal atau YouTube Video tunggal, cek dulu lagunya apa (normal vs DJ/Remix/Slowed)
+    const spTrackMatch = query.match(/open\.spotify\.com\/(?:intl-[a-z]{2}\/)?track\/([A-Za-z0-9]{22})/i);
+    const ytWatchMatch = query.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/i);
+
+    if (spTrackMatch) {
+      try {
+        const oembedResp = await fetch(
+          `https://open.spotify.com/oembed?url=${encodeURIComponent(`https://open.spotify.com/track/${spTrackMatch[1]}`)}`
+        );
+        if (oembedResp.ok) {
+          const meta = (await oembedResp.json()) as { title?: string };
+          if (meta.title) {
+            effectiveQuery = String(meta.title).trim();
+          }
+        }
+      } catch {
+        // Fallback to raw query
+      }
+    } else if (ytWatchMatch && !query.includes('list=')) {
+      const vid = ytWatchMatch[1];
+      try {
+        const oembedResp = await fetch(
+          `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${vid}`)}&format=json`
+        );
+        if (oembedResp.ok) {
+          const meta = (await oembedResp.json()) as { title?: string; author_name?: string };
+          const rawYtTitle = String(meta.title || '').trim();
+          const rawYtAuthor = String(meta.author_name || 'YouTube Audio')
+            .replace(/\s*-\s*Topic$/i, '')
+            .replace(/\s*Official$/i, '')
+            .trim();
+          if (rawYtTitle) {
+            const vidMods = detectVersionModifiers(`${rawYtTitle} ${rawYtAuthor}`);
+            const isMv =
+              /\b(official\s*music\s*video|music\s*video|official\s*video|video\s*klip|m\/v|\bmv\b)\b/i.test(
+                rawYtTitle
+              ) && !/\baudio\b/i.test(rawYtTitle);
+            const cleanedYtTitle = cleanYoutubeTitleKeepVersion(rawYtTitle);
+            let sTitle = cleanedYtTitle;
+            let sArtist = rawYtAuthor;
+            if (cleanedYtTitle.includes(' - ')) {
+              const [aPart, tPart] = cleanedYtTitle.split(' - ', 2);
+              if (aPart.trim() && tPart.trim()) {
+                sArtist = aPart.trim();
+                sTitle = tPart.trim().replace(/^["']|["']$/g, '');
+              }
+            }
+            if (vidMods.length > 0 || !isMv) {
+              res.json({
+                results: [
+                  {
+                    title: sTitle,
+                    artist: sArtist,
+                    album: 'YouTube Audio',
+                    duration_sec: 205,
+                    source_type: 'youtube',
+                    source_url: `https://www.youtube.com/watch?v=${vid}`,
+                    stream_url: '',
+                    thumbnail_url: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+                  },
+                ],
+              });
+              return;
+            }
+            // Jika lagu biasa tapi berupa MV, cari versi Official Audio murni dari lagu tersebut
+            effectiveQuery = `${sArtist} - ${sTitle}`;
+          }
+        }
+      } catch {
+        // Fallback to search below
+      }
+    }
+
+    const requestedMods = detectVersionModifiers(effectiveQuery);
+    const qLower = effectiveQuery.toLowerCase();
+    const localMatches = CURATED_CATALOG.filter((item) => {
+      const itemMods = detectVersionModifiers(`${item.title} ${item.artist}`);
+      if (!doVersionModifiersMatch(requestedMods, itemMods)) return false;
+      return (
         item.title.toLowerCase().includes(qLower) ||
         item.artist.toLowerCase().includes(qLower) ||
-        item.album.toLowerCase().includes(qLower)
-    );
+        `${item.artist} - ${item.title}`.toLowerCase().includes(qLower) ||
+        `${item.title} ${item.artist}`.toLowerCase().includes(qLower)
+      );
+    });
 
     const remoteResults: Array<{
       title: string;
@@ -2084,8 +2306,12 @@ async function startServer() {
 
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 3800);
-      const ytUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&hl=id`;
+      const timer = setTimeout(() => controller.abort(), 4200);
+      const ytSearchTerm =
+        requestedMods.length === 0 && !/\baudio\b/i.test(effectiveQuery)
+          ? `${effectiveQuery} official audio`
+          : effectiveQuery;
+      const ytUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(ytSearchTerm)}&hl=id`;
       const resp = await fetch(ytUrl, {
         signal: controller.signal,
         headers: {
@@ -2118,12 +2344,25 @@ async function startServer() {
                 .replace(/\s*Official$/i, '')
                 .trim();
 
-              const cleanTitle = rawTitle
-                .replace(
-                  /\s*[\(\[](?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video|lyrics|mv|visualizer)|lirik|lyrics?|audio|hd|4k)[\)\]]/gi,
-                  ''
-                )
-                .trim();
+              const durText = String(vr?.lengthText?.simpleText || '3:30');
+              const durParts = durText.split(':').map((n) => Number(n));
+              const durationSec =
+                durParts.length === 2
+                  ? durParts[0] * 60 + durParts[1]
+                  : durParts.length === 3
+                  ? durParts[0] * 3600 + durParts[1] * 60 + durParts[2]
+                  : 195;
+
+              if (isUnwantedMusicVideoOrLongTrack(rawTitle, durationSec, requestedMods)) {
+                continue;
+              }
+
+              const candMods = detectVersionModifiers(`${rawTitle} ${rawChannel}`);
+              if (!doVersionModifiersMatch(requestedMods, candMods)) {
+                continue;
+              }
+
+              const cleanTitle = cleanYoutubeTitleKeepVersion(rawTitle);
 
               let songTitle = cleanTitle;
               let artistName = rawChannel;
@@ -2135,20 +2374,11 @@ async function startServer() {
                 }
               }
 
-              const durText = String(vr?.lengthText?.simpleText || '3:30');
-              const durParts = durText.split(':').map((n) => Number(n));
-              const durationSec =
-                durParts.length === 2
-                  ? durParts[0] * 60 + durParts[1]
-                  : durParts.length === 3
-                  ? durParts[0] * 3600 + durParts[1] * 60 + durParts[2]
-                  : 195;
-
               remoteResults.push({
                 title: songTitle,
                 artist: artistName,
                 album: 'YouTube Audio',
-                duration_sec: Math.max(30, durationSec || 195),
+                duration_sec: Math.max(65, durationSec || 195),
                 source_type: 'youtube',
                 source_url: `https://www.youtube.com/watch?v=${vr.videoId}`,
                 stream_url: '',
@@ -2166,8 +2396,9 @@ async function startServer() {
 
     const seen = new Set<string>();
     const combined = [];
-    for (const item of [...localMatches, ...remoteResults]) {
-      const key = `${item.title.toLowerCase()}::${item.artist.toLowerCase()}`;
+    for (const item of [...remoteResults, ...localMatches]) {
+      const modTag = detectVersionModifiers(`${item.title} ${item.artist}`).join('_') || 'original';
+      const key = `${item.title.toLowerCase()}::${item.artist.toLowerCase()}::${modTag}`;
       if (!seen.has(key)) {
         seen.add(key);
         combined.push(item);
@@ -2282,19 +2513,25 @@ async function startServer() {
       return;
     }
 
+    const reqMods = detectVersionModifiers(`${title} ${artist}`);
+
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 4000);
-      const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=3`;
+      const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=5`;
       const resp = await fetch(itunesUrl, { signal: controller.signal });
       clearTimeout(timer);
       if (resp.ok) {
         const data = (await resp.json()) as { results?: Array<Record<string, unknown>> };
-        const first = (data.results || []).find((r) => Boolean(r.previewUrl));
-        if (first && first.previewUrl) {
+        const matched = (data.results || []).find((r) => {
+          if (!r.previewUrl) return false;
+          const rMods = detectVersionModifiers(`${r.trackName || ''} ${r.artistName || ''}`);
+          return doVersionModifiersMatch(reqMods, rMods);
+        });
+        if (matched && matched.previewUrl) {
           const resolved = {
-            stream_url: String(first.previewUrl),
-            thumbnail_url: String(first.artworkUrl100 || '').replace('100x100bb', '600x600bb'),
+            stream_url: String(matched.previewUrl),
+            thumbnail_url: String(matched.artworkUrl100 || '').replace('100x100bb', '600x600bb'),
           };
           previewStreamCache.set(cacheKey, resolved);
           res.json(resolved);
@@ -3108,6 +3345,54 @@ END:VCALENDAR`;
     res.send(fs.readFileSync(storedPath));
   });
 
+  app.delete('/api/guilds/:guildId/modules/:attachmentId', (req, res) => {
+    const { guildId, attachmentId } = req.params;
+    const row = db
+      .prepare('SELECT * FROM task_attachments WHERE attachment_id = ? AND guild_id = ?')
+      .get(attachmentId, guildId) as Record<string, unknown> | undefined;
+    if (!row) {
+      res.status(404).json({ error: 'Modul atau lampiran tidak ditemukan.' });
+      return;
+    }
+    db.prepare('DELETE FROM task_attachments WHERE attachment_id = ?').run(attachmentId);
+    const storedName = path.basename(String(row.stored_filename || ''));
+    if (storedName) {
+      const storedPath = path.join(MODULES_DIR, storedName);
+      if (fs.existsSync(storedPath)) {
+        try {
+          fs.unlinkSync(storedPath);
+        } catch {
+          // Ignore file removal error
+        }
+      }
+    }
+    res.json({ ok: true, deleted_id: attachmentId });
+  });
+
+  app.delete('/api/modules/:attachmentId', (req, res) => {
+    const { attachmentId } = req.params;
+    const row = db
+      .prepare('SELECT * FROM task_attachments WHERE attachment_id = ?')
+      .get(attachmentId) as Record<string, unknown> | undefined;
+    if (!row) {
+      res.status(404).json({ error: 'Modul atau lampiran tidak ditemukan.' });
+      return;
+    }
+    db.prepare('DELETE FROM task_attachments WHERE attachment_id = ?').run(attachmentId);
+    const storedName = path.basename(String(row.stored_filename || ''));
+    if (storedName) {
+      const storedPath = path.join(MODULES_DIR, storedName);
+      if (fs.existsSync(storedPath)) {
+        try {
+          fs.unlinkSync(storedPath);
+        } catch {
+          // Ignore file removal error
+        }
+      }
+    }
+    res.json({ ok: true, deleted_id: attachmentId });
+  });
+
   // RPG Leaderboard & AFK Endpoints
   app.get('/api/guilds/:guildId/rpg', (req, res) => {
     const { guildId } = req.params;
@@ -3378,79 +3663,17 @@ END:VCALENDAR`;
     }
   });
 
-  // Real Python Source Codebase Inspector & 1-Click ZIP Downloader
-  const PYTHON_FILES_MANIFEST = [
-    { path: 'app/main.py', role: 'Entrypoint utama single-instance (Bot Discord + Uvicorn Web Server)' },
-    { path: 'app/config.py', role: 'Pemuatan variabel .env dan pemeriksaan kesiapan fitur mandiri' },
-    { path: 'app/database.py', role: 'Manajer SQLite WAL & migrasi skema 15 tabel idempoten' },
-    { path: 'app/models/schema.py', role: 'Dataclass domain untuk MusicSession, QueueItem, dan Task' },
-    { path: 'app/security/validators.py', role: 'Host Lock System, SSRF blocker, validasi file modul & magic bytes, enkripsi HMAC' },
-    { path: 'app/services/music_service.py', role: 'Pencarian lagu + penyanyi, pencocokan metadata Spotify oEmbed, radio, ekstraksi yt-dlp' },
-    { path: 'app/services/queue_service.py', role: 'Queue Manager per-server, pencegahan race condition, Loop, Autoplay, Mode 24/7' },
-    { path: 'app/services/lyrics_service.py', role: 'Klien LRCLIB publik (syncedLyrics ber-timestamp & plainLyrics + penanganan HTTP 429)' },
-    { path: 'app/services/academy_service.py', role: 'Parser kalender .ics Moodle, deduplikasi UID, dan evaluasi Reminder 3 tahap' },
-    { path: 'app/services/leveling_service.py', role: 'Formula EXP RPG max_exp = 100 + (level * 25), cooldown anti-spam, Top 15, AFK' },
-    { path: 'app/services/backup_service.py', role: 'Snapshot SQLite online backup(), kompresi gzip, enkripsi kunci terpisah' },
-    { path: 'app/bot/client.py', role: 'Implementasi discord.py Bot, Slash Commands, Voice Host Transfer, dan event EXP' },
-    { path: 'app/web/routes/api.py', role: 'Endpoint FastAPI REST untuk Dashboard, Musik, Akademik, RPG, dan Admin Server' },
-    { path: 'tests/test_athenaa.py', role: 'Suite pengujian otomatis (unittest / pytest) untuk seluruh modul inti' },
-    { path: 'requirements.txt', role: 'Daftar dependensi Python yang kompatibel untuk VPS / Pterodactyl' },
-    { path: 'start.sh', role: 'Skrip startup produksi single-worker untuk Pterodactyl & VPS' },
-    { path: 'README.md', role: 'Dokumentasi instalasi, arsitektur, OAuth2, dan troubleshooting dalam Bahasa Indonesia' },
-  ];
-
-  app.get('/api/python-codebase', (req, res) => {
-    const active = getSessionFromRequest(req);
-    const check = canAccessOwnerResources({
-      isAdmin: Boolean(active?.user.isAdmin || active?.user.isOwner),
-      isOwner: Boolean(active?.user.isAdmin || active?.user.isOwner),
-      sessionToken: active?.session_token || null,
-    });
-    if (!check.allowed) {
-      res.status(403).json({ error: check.reason });
-      return;
-    }
-
-    const requestedFile = String(req.query.file || 'app/main.py');
-    const match = PYTHON_FILES_MANIFEST.find((f) => f.path === requestedFile) || PYTHON_FILES_MANIFEST[0];
-    const absPath = path.join(ATHENAA_DIR, match.path);
-    const content = fs.existsSync(absPath) ? fs.readFileSync(absPath, 'utf-8') : '# File tidak ditemukan';
-    res.json({
-      files: PYTHON_FILES_MANIFEST,
-      selected_file: match.path,
-      selected_role: match.role,
-      content,
+  // Source Codebase & ZIP Download Endpoints Disabled (Hidden by Security Policy)
+  app.get('/api/python-codebase', (_req, res) => {
+    res.status(403).json({
+      error: 'Kode sumber bot disembunyikan dan dinonaktifkan untuk semua role.',
     });
   });
 
-  app.get('/api/python-codebase/download-zip', async (req, res) => {
-    const active = getSessionFromRequest(req);
-    const check = canAccessOwnerResources({
-      isAdmin: Boolean(active?.user.isAdmin || active?.user.isOwner),
-      isOwner: Boolean(active?.user.isAdmin || active?.user.isOwner),
-      sessionToken: active?.session_token || null,
+  app.get('/api/python-codebase/download-zip', (_req, res) => {
+    res.status(403).json({
+      error: 'Unduhan file .zip kode bot dinonaktifkan.',
     });
-    if (!check.allowed) {
-      res.status(403).json({ error: check.reason });
-      return;
-    }
-
-    try {
-      const { stdout } = await execFileAsync('python3', ['-m', 'app.cli_bridge', 'zip'], {
-        cwd: ATHENAA_DIR,
-        env: { ...process.env, PYTHONPATH: ATHENAA_DIR },
-      });
-      const info = JSON.parse(stdout.trim());
-      if (info.zip_path && fs.existsSync(info.zip_path)) {
-        res.setHeader('Content-Type', 'application/zip');
-        res.setHeader('Content-Disposition', 'attachment; filename="athenaa-discord-bot.zip"');
-        res.send(fs.readFileSync(info.zip_path));
-        return;
-      }
-      res.status(500).json({ error: 'Gagal membuat arsip ZIP.' });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
   });
 
   if (process.env.NODE_ENV !== 'production') {

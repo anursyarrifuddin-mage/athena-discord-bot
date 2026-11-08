@@ -399,3 +399,150 @@ export function enforceSingleDiscordSession(
   };
 }
 
+const VERSION_CATEGORY_REGEXES: Array<{ category: string; regex: RegExp }> = [
+  {
+    category: 'dj_remix',
+    regex: /\b(dj|remix|rmx|jedag\s*jedug|jj|breakbeat|funkot|mengkane|full\s*bass|bass\s*boosted|bootleg|mashup|rework|vip\s*mix|club\s*mix|extended\s*mix|thai\s*style|plat\s*kt)\b/i,
+  },
+  {
+    category: 'slowed',
+    regex: /\b(slowed|reverb|slow\s*version)\b/i,
+  },
+  {
+    category: 'sped_up',
+    regex: /\b(sped\s*up|speed\s*up|nightcore)\b/i,
+  },
+  {
+    category: 'koplo',
+    regex: /\b(koplo|dangdut|campursari|kendang|pongdut|bajidor)\b/i,
+  },
+  {
+    category: 'cover',
+    regex: /\b(cover|covered\s*by)\b/i,
+  },
+  {
+    category: 'live',
+    regex: /\b(live\s*session|live\s*performance|live\s*at|live\s*version|konser)\b/i,
+  },
+  {
+    category: 'acoustic',
+    regex: /\b(acoustic|akustik|unplugged|piano\s*version|guitar\s*version)\b/i,
+  },
+  {
+    category: 'instrumental',
+    regex: /\b(instrumental|karaoke|minus\s*one)\b/i,
+  },
+];
+
+/**
+ * Detects version modifier categories (dj_remix, slowed, sped_up, koplo, cover, live, acoustic, instrumental)
+ * present in a search query, track title, or artist name.
+ */
+export function detectVersionModifiers(text: string): string[] {
+  const raw = (text || '').trim();
+  if (!raw) return [];
+  const found: string[] = [];
+  for (const item of VERSION_CATEGORY_REGEXES) {
+    if (item.regex.test(raw)) {
+      found.push(item.category);
+    }
+  }
+  return found.sort();
+}
+
+/**
+ * Checks whether a candidate track's version modifiers match the user's requested version modifiers:
+ * - If requestedMods is empty (normal song search), candidateMods MUST be empty (rejects DJ, Remix, Slowed, etc.).
+ * - If requestedMods is non-empty (e.g. user searched for 'dj' or 'remix' or 'slowed'), candidateMods MUST contain all requestedMods.
+ */
+export function doVersionModifiersMatch(requestedMods: string[], candidateMods: string[]): boolean {
+  if (!requestedMods || requestedMods.length === 0) {
+    return !candidateMods || candidateMods.length === 0;
+  }
+  const candSet = new Set(candidateMods || []);
+  return requestedMods.every((m) => candSet.has(m));
+}
+
+/**
+ * Cleans YouTube video titles while preserving DJ/Remix/Slowed/Koplo/Cover modifiers inside brackets or pipes.
+ */
+export function cleanYoutubeTitleKeepVersion(rawTitle: string): string {
+  if (!rawTitle) return '';
+  let t = rawTitle.trim();
+
+  if (t.includes('|')) {
+    const parts = t.split('|').map((p) => p.trim()).filter(Boolean);
+    const kept: string[] = [];
+    parts.forEach((p, idx) => {
+      if (idx === 0) {
+        kept.push(p);
+      } else if (detectVersionModifiers(p).length > 0) {
+        const cleanedSeg = p
+          .replace(
+            /\b(official\s*music\s*video|official\s*video|official\s*audio|official\s*lyric\s*video|lyric\s*video|music\s*video|video\s*klip|visualizer|official|lirik\s*lagu|lirik|lyrics?|audio|video|hd|4k|hq|tiktok\s*viral|lagu\s*terbaru|terbaru\s*202\d)\b/gi,
+            ' '
+          )
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (cleanedSeg) kept.push(`(${cleanedSeg})`);
+      }
+    });
+    t = kept.join(' ');
+  }
+
+  t = t.replace(/[\(\[][^\)\]]+[\)\]]/g, (bracketMatch) => {
+    const inner = bracketMatch.slice(1, -1).trim();
+    if (detectVersionModifiers(inner).length > 0) {
+      const cleanedInner = inner
+        .replace(
+          /\b(official\s*music\s*video|official\s*video|official\s*audio|official\s*lyric\s*video|lyric\s*video|music\s*video|video\s*klip|visualizer|official|lirik\s*lagu|lirik|lyrics?|audio|video|hd|4k|hq|tiktok\s*viral|lagu\s*terbaru|terbaru\s*202\d)\b/gi,
+          ' '
+        )
+        .replace(/\s+/g, ' ')
+        .trim();
+      return cleanedInner ? `(${cleanedInner})` : '';
+    }
+    if (
+      /\b(official|video|audio|lyric|lirik|mv|visualizer|hd|4k|hq|topic|terbaru|viral|full\s*album)\b/i.test(
+        inner
+      )
+    ) {
+      return '';
+    }
+    return bracketMatch;
+  });
+
+  return t.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Checks whether a YouTube candidate is a long compilation/album, non-music video, or an unwanted MV.
+ */
+export function isUnwantedMusicVideoOrLongTrack(
+  rawTitle: string,
+  durationSec: number,
+  requestedMods: string[] = []
+): boolean {
+  const t = (rawTitle || '').trim();
+  if (!t) return true;
+  if (durationSec > 0 && durationSec < 65) return true;
+  const maxDur = requestedMods.length > 0 ? 660 : 540;
+  if (durationSec > maxDur) return true;
+  if (
+    /\b(full\s*album|album\s*full|kompilasi|compilation|playlist|nonstop|non-stop|megamix|1\s*hour|2\s*hours|1\s*jam|2\s*jam|kumpulan\s*lagu|daftar\s*lagu|reaction|reaksi|podcast|interview|behind\s*the\s*scene|making\s*of|teaser|trailer|short\s*film)\b/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  const isMv =
+    /\b(official\s*music\s*video|music\s*video|official\s*video|video\s*klip|video\s*clip|official\s*mv|m\/v|\bmv\b|dance\s*practice|performance\s*video)\b/i.test(
+      t
+    ) && !/\baudio\b/i.test(t);
+  if (isMv && requestedMods.length === 0) {
+    return true;
+  }
+  return false;
+}
+
+

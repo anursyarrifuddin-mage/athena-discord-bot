@@ -15,11 +15,9 @@ import {
   Clock,
   Settings,
   Shield,
-  Code2,
   Play,
   CheckCircle2,
   Circle,
-  Download,
   Music,
   ShieldCheck,
   Mic2,
@@ -40,6 +38,7 @@ import {
   GuildSettings,
   LevelProfile,
   ReminderDelivery,
+  ServerRoleType,
   TaskAttachment,
   TrackItem,
 } from './types/athenaa';
@@ -59,8 +58,7 @@ type NavTab =
   | 'rpg'
   | 'afk'
   | 'settings'
-  | 'admin'
-  | 'codebase';
+  | 'admin';
 
 const DEFAULT_ADMIN_PROFILE: ActiveActorProfile = {
   id: '844174494099701780',
@@ -70,7 +68,8 @@ const DEFAULT_ADMIN_PROFILE: ActiveActorProfile = {
   roles: ['role-admin', 'role-dj'],
   hasDjRole: true,
   isAdmin: true,
-  isOwner: true,
+  isOwner: false,
+  guildRoles: { '1428666546942902294': 'admin' },
 };
 
 const DEFAULT_MUSIC_STATE: GuildMusicState = {
@@ -139,39 +138,45 @@ export default function App() {
         isOwner?: boolean;
         hasDjRole: boolean;
         isAdmin: boolean;
-      }
+        guildRoles?: Record<string, ServerRoleType>;
+      },
+      forGuildId?: string
     ) => {
       window.localStorage.setItem('athenaa_session_token', token);
       setSessionToken(token);
-      const resolvedRole: 'admin' | 'dj' | 'member' =
-        user.role || (user.isAdmin ? 'admin' : user.hasDjRole ? 'dj' : 'member');
-      setActiveActor({
-        id: user.id,
-        name: user.name,
-        role: resolvedRole,
-        roleLabel:
-          user.roleLabel ||
-          (resolvedRole === 'admin'
-            ? 'Admin Server'
-            : resolvedRole === 'dj'
-            ? 'Role DJ'
-            : 'Member Server'),
-        roles:
-          resolvedRole === 'admin'
-            ? ['role-admin', 'role-dj']
-            : resolvedRole === 'dj'
-            ? ['role-dj']
-            : [],
-        hasDjRole: Boolean(user.hasDjRole || resolvedRole === 'admin' || resolvedRole === 'dj'),
-        isAdmin: Boolean(user.isAdmin || resolvedRole === 'admin'),
-        isOwner: Boolean(user.isAdmin || resolvedRole === 'admin'),
+      setActiveActor((prev) => {
+        const targetGid = forGuildId || selectedGuildId;
+        const mergedGuildRoles: Record<string, ServerRoleType> = {
+          ...(prev.guildRoles || {}),
+          ...(user.guildRoles || {}),
+        };
+        const resolvedRole: ServerRoleType =
+          (targetGid && user.guildRoles?.[targetGid]) ||
+          user.role ||
+          (user.isAdmin ? 'admin' : user.hasDjRole ? 'dj' : 'member');
+        if (targetGid) {
+          mergedGuildRoles[targetGid] = resolvedRole;
+        }
+        const isAdm = resolvedRole === 'admin';
+        const hasDj = resolvedRole === 'admin' || resolvedRole === 'dj';
+        if (!isAdm) {
+          setActiveTab((tab) => (tab === 'admin' ? 'overview' : tab));
+        }
+        return {
+          id: user.id,
+          name: user.name,
+          role: resolvedRole,
+          roleLabel: isAdm ? 'Admin Server' : hasDj ? 'Role DJ' : 'Member',
+          roles: isAdm ? ['role-admin', 'role-dj'] : hasDj ? ['role-dj'] : [],
+          hasDjRole: hasDj,
+          isAdmin: isAdm,
+          isOwner: false,
+          guildRoles: mergedGuildRoles,
+        };
       });
       setShowLoginModal(false);
-      if (resolvedRole !== 'admin') {
-        setActiveTab((prev) => (prev === 'admin' || prev === 'codebase' ? 'overview' : prev));
-      }
     },
-    []
+    [selectedGuildId]
   );
 
   const handleSwitchRole = useCallback(
@@ -180,14 +185,19 @@ export default function App() {
         const resp = await fetch('/api/auth/login', {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ role }),
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Guild-Id': selectedGuildId,
+          },
+          body: JSON.stringify({ role, guild_id: selectedGuildId }),
         });
         if (resp.ok) {
           const data = await resp.json();
           if (data.session_token && data.user) {
-            applyAuthenticatedUser(data.session_token, data.user);
-            showNotice(`Peran aktif diubah ke: ${data.user.roleLabel} (${data.user.name})`);
+            applyAuthenticatedUser(data.session_token, data.user, selectedGuildId);
+            showNotice(
+              `Peran aktif pada server ini diubah ke: ${data.user.roleLabel} (${data.user.name})`
+            );
             return;
           }
         }
@@ -203,6 +213,7 @@ export default function App() {
               roleLabel: 'Admin Server',
               isAdmin: true,
               hasDjRole: true,
+              guildRoles: { [selectedGuildId]: 'admin' as const },
             }
           : role === 'dj'
           ? {
@@ -212,22 +223,24 @@ export default function App() {
               roleLabel: 'Role DJ',
               isAdmin: false,
               hasDjRole: true,
+              guildRoles: { [selectedGuildId]: 'dj' as const },
             }
           : {
               id: '698812445519002112',
               name: 'Kazuha',
               role: 'member' as const,
-              roleLabel: 'Member Server',
+              roleLabel: 'Member',
               isAdmin: false,
               hasDjRole: false,
+              guildRoles: { [selectedGuildId]: 'member' as const },
             };
-      applyAuthenticatedUser(`local-${role}-session`, fallbackUser);
-      showNotice(`Peran aktif diubah ke: ${fallbackUser.roleLabel}`);
+      applyAuthenticatedUser(`local-${role}-session`, fallbackUser, selectedGuildId);
+      showNotice(`Peran aktif pada server ini diubah ke: ${fallbackUser.roleLabel}`);
     },
-    [applyAuthenticatedUser, showNotice]
+    [applyAuthenticatedUser, selectedGuildId, showNotice]
   );
 
-  // Validate or bootstrap Discord session on load (defaults to Admin Server if not configured)
+  // Validate or bootstrap Discord session per selected server (strictly scoped per guild_id)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlTok = params.get('session_token');
@@ -236,20 +249,44 @@ export default function App() {
       window.history.replaceState({}, '', window.location.pathname);
     }
 
-    const storedToken = urlTok || window.localStorage.getItem('athenaa_session_token') || '';
-    const url = storedToken
-      ? `/api/auth/session?session_token=${encodeURIComponent(storedToken)}`
-      : '/api/auth/session?auto_bootstrap=1';
+    // Optimistic per-server role enforcement when switching servers
+    setActiveActor((prev) => {
+      const map = prev.guildRoles || {};
+      const roleForGuild: ServerRoleType = map[selectedGuildId] || 'member';
+      const isAdm = roleForGuild === 'admin';
+      const hasDj = roleForGuild === 'admin' || roleForGuild === 'dj';
+      if (!isAdm) {
+        setActiveTab((tab) => (tab === 'admin' ? 'overview' : tab));
+      }
+      return {
+        ...prev,
+        role: roleForGuild,
+        roleLabel: isAdm ? 'Admin Server' : hasDj ? 'Role DJ' : 'Member',
+        roles: isAdm ? ['role-admin', 'role-dj'] : hasDj ? ['role-dj'] : [],
+        hasDjRole: hasDj,
+        isAdmin: isAdm,
+        isOwner: false,
+      };
+    });
 
-    fetch(url, {
+    const storedToken = urlTok || window.localStorage.getItem('athenaa_session_token') || '';
+    const queryParts = new URLSearchParams();
+    if (storedToken) queryParts.set('session_token', storedToken);
+    else queryParts.set('auto_bootstrap', '1');
+    if (selectedGuildId) queryParts.set('guild_id', selectedGuildId);
+
+    fetch(`/api/auth/session?${queryParts.toString()}`, {
       credentials: 'include',
-      headers: storedToken ? { Authorization: `Bearer ${storedToken}` } : {},
+      headers: {
+        ...(storedToken ? { Authorization: `Bearer ${storedToken}` } : {}),
+        'X-Guild-Id': selectedGuildId,
+      },
     })
       .then(async (r) => {
         if (r.ok) {
           const data = await r.json();
           if (data.authenticated && data.session_token && data.user) {
-            applyAuthenticatedUser(data.session_token, data.user);
+            applyAuthenticatedUser(data.session_token, data.user, selectedGuildId);
             if (urlTok) {
               showNotice(`Otorisasi Discord OAuth2 berhasil: ${data.user.name} (${data.user.roleLabel}).`);
             }
@@ -259,7 +296,7 @@ export default function App() {
       .catch(() => {
         // Ignore transient offline error
       });
-  }, [applyAuthenticatedUser, showNotice]);
+  }, [selectedGuildId, applyAuthenticatedUser, showNotice]);
 
   // Listen for official Discord OAuth2 completion via postMessage, BroadcastChannel, storage, and polling
   useEffect(() => {
@@ -549,6 +586,7 @@ export default function App() {
       headers: {
         'Content-Type': 'application/json',
         'X-Actor-Role': actorRole,
+        'X-Guild-Id': selectedGuildId,
         ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
       },
       body: JSON.stringify({
@@ -565,7 +603,7 @@ export default function App() {
         requester_name: activeActor.name,
         user_roles: activeActor.roles,
         is_admin: activeActor.isAdmin,
-        is_owner: activeActor.isAdmin,
+        is_owner: false,
       }),
     });
     const data = await resp.json();
@@ -700,6 +738,7 @@ export default function App() {
       headers: {
         'Content-Type': 'application/json',
         'X-Actor-Role': actorRole,
+        'X-Guild-Id': selectedGuildId,
         ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
       },
       body: JSON.stringify({
@@ -710,7 +749,7 @@ export default function App() {
         actor_name: activeActor.name,
         user_roles: activeActor.roles,
         is_admin: activeActor.isAdmin,
-        is_owner: activeActor.isAdmin,
+        is_owner: false,
       }),
     });
     const data = await resp.json();
@@ -816,14 +855,6 @@ export default function App() {
       icon: <Shield className="w-5 h-5" />,
       adminOnly: true,
     },
-    {
-      id: 'codebase',
-      label: 'Kode Bot Python',
-      subtitle: 'Source /athenaa & Paket .zip',
-      group: 'system',
-      icon: <Code2 className="w-5 h-5" />,
-      adminOnly: true,
-    },
   ];
 
   const isServerAdmin = Boolean(activeActor.isAdmin);
@@ -923,32 +954,8 @@ export default function App() {
           />
         </div>
 
-        {/* Right Zone (Desktop 4 cols): Admin-Only Code/ZIP Actions + Role Switcher & Discord Account Pill */}
+        {/* Right Zone (Desktop 4 cols): Per-Server Role Switcher & Discord Account Pill */}
         <div className="hidden md:flex md:col-span-4 items-center justify-end gap-2 min-w-0">
-          {isServerAdmin && (
-            <>
-              <button
-                type="button"
-                onClick={() => setActiveTab('codebase')}
-                className="px-3 py-1.5 rounded-full bg-[#1F1F1F] hover:bg-[#2A2A2A] border border-white/10 text-xs font-bold text-white whitespace-nowrap flex items-center gap-1.5 transition-colors shrink-0"
-                title="Khusus Admin Server: Inspeksi Kode Sumber Python"
-              >
-                <Code2 className="w-3.5 h-3.5 text-[#DC95FF]" />
-                Kode Python
-              </button>
-
-              <a
-                href={`/api/python-codebase/download-zip?session_token=${encodeURIComponent(sessionToken)}`}
-                download="athenaa-discord-bot.zip"
-                className="px-3.5 py-1.5 rounded-full bg-[#DC95FF] hover:bg-[#FFBEFB] text-black font-bold text-xs whitespace-nowrap flex items-center gap-1.5 transition-transform active:scale-95 shrink-0"
-                title="Khusus Admin Server: Unduh Paket Bot Python (.zip) Siap Pterodactyl"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Unduh Bot (.zip)
-              </a>
-            </>
-          )}
-
           {/* Per-Server Role Switcher + Discord Account Pill */}
           <div className="flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-full bg-[#1F1F1F] border border-white/10 min-w-0">
             <select
@@ -1062,19 +1069,6 @@ export default function App() {
                   );
                 })}
             </div>
-
-            {isServerAdmin && (
-              <div className="p-3 border-t border-white/10 space-y-2">
-                <a
-                  href={`/api/python-codebase/download-zip?session_token=${encodeURIComponent(sessionToken)}`}
-                  download="athenaa-discord-bot.zip"
-                  className="w-full py-2 px-3 rounded-full bg-[#DC95FF] text-black font-bold text-xs flex items-center justify-center gap-1.5"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Unduh Paket Bot (.zip)
-                </a>
-              </div>
-            )}
           </aside>
         </div>
       )}
@@ -1323,22 +1317,22 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Card 6: Admin Server & Python Bot OR Member Modules Card */}
+                    {/* Card 6: Admin Server Hub OR Member Modules Card */}
                     {isServerAdmin ? (
                       <div
-                        onClick={() => setActiveTab('codebase')}
+                        onClick={() => setActiveTab('admin')}
                         className="h-14 bg-white/5 hover:bg-white/15 rounded-md overflow-hidden flex items-center justify-between pr-3 cursor-pointer transition-colors group"
                       >
                         <div className="flex items-center gap-3 min-w-0">
                           <div className="w-14 h-14 bg-fuchsia-900/40 flex items-center justify-center shrink-0">
-                            <Code2 className="w-6 h-6 text-[#DC95FF]" />
+                            <Shield className="w-6 h-6 text-[#DC95FF]" />
                           </div>
                           <div className="min-w-0">
                             <div className="text-xs font-bold text-white truncate">
-                              Admin Server & Kode Python
+                              Admin Server Hub
                             </div>
                             <div className="text-[11px] text-[#B3B3B3] truncate">
-                              Khusus Admin Server · Paket Deploy .zip
+                              Khusus Admin Server Ini · Metrik & Backup
                             </div>
                           </div>
                         </div>
@@ -1624,8 +1618,7 @@ export default function App() {
             {(activeTab === 'rpg' ||
               activeTab === 'afk' ||
               activeTab === 'settings' ||
-              activeTab === 'admin' ||
-              activeTab === 'codebase') && (
+              activeTab === 'admin') && (
               <RpgAndSettingsView
                 subTab={activeTab}
                 guildId={selectedGuildId}

@@ -11,6 +11,10 @@ import {
   validateAttachmentMeta,
   canAccessOwnerResources,
   enforceSingleDiscordSession,
+  detectVersionModifiers,
+  doVersionModifiersMatch,
+  cleanYoutubeTitleKeepVersion,
+  isUnwantedMusicVideoOrLongTrack,
 } from './athenaaRules';
 
 test('RPG leveling formula calculates max_exp = 100 + (level * 25) and handles level up', () => {
@@ -183,4 +187,54 @@ test('Owner-only Python codebase & ZIP access and 1-user-1-session lock work acc
   assert.equal(second.activeToken, 'tok_2');
   assert.equal(sessions.get('998877665544332211'), 'tok_2');
 });
+
+test('Smart version-aware music matching separates normal songs from DJ/Remix/Slowed and blocks MVs/compilations', () => {
+  const normalQueryMods = detectVersionModifiers('the weeknd - one of the girls');
+  assert.deepEqual(normalQueryMods, []);
+
+  const djCandidateMods = detectVersionModifiers('DJ One Of The Girls Remix Full Bass');
+  assert.deepEqual(djCandidateMods, ['dj_remix']);
+
+  const slowedCandidateMods = detectVersionModifiers('The Weeknd - One Of The Girls (Slowed + Reverb)');
+  assert.deepEqual(slowedCandidateMods, ['slowed']);
+
+  // Normal song query must reject DJ/Remix and Slowed candidates
+  assert.equal(doVersionModifiersMatch(normalQueryMods, []), true);
+  assert.equal(doVersionModifiersMatch(normalQueryMods, djCandidateMods), false);
+  assert.equal(doVersionModifiersMatch(normalQueryMods, slowedCandidateMods), false);
+
+  // DJ/Remix query must reject normal original song and accept DJ/Remix candidate
+  const djQueryMods = detectVersionModifiers('dj the weeknd one of the girls remix');
+  assert.equal(doVersionModifiersMatch(djQueryMods, []), false);
+  assert.equal(doVersionModifiersMatch(djQueryMods, djCandidateMods), true);
+
+  // Bracket/pipe cleaner preserves DJ/Remix/Slowed while stripping Official Audio/Video junk
+  assert.equal(
+    cleanYoutubeTitleKeepVersion('The Weeknd - One Of The Girls (Official Audio)'),
+    'The Weeknd - One Of The Girls'
+  );
+  assert.equal(
+    cleanYoutubeTitleKeepVersion('The Weeknd - One Of The Girls (DJ Remix Official Audio)'),
+    'The Weeknd - One Of The Girls (DJ Remix)'
+  );
+  assert.equal(
+    cleanYoutubeTitleKeepVersion('One Of The Girls | Slowed + Reverb Official Video'),
+    'One Of The Girls (Slowed + Reverb)'
+  );
+
+  // Rejects Official Music Video and long compilations on normal song queries
+  assert.equal(
+    isUnwantedMusicVideoOrLongTrack('The Weeknd - One Of The Girls (Official Music Video)', 260, []),
+    true
+  );
+  assert.equal(
+    isUnwantedMusicVideoOrLongTrack('The Weeknd - One Of The Girls (Official Audio)', 244, []),
+    false
+  );
+  assert.equal(
+    isUnwantedMusicVideoOrLongTrack('The Weeknd Full Album Nonstop 1 Hour', 3600, []),
+    true
+  );
+});
+
 

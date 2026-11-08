@@ -78,20 +78,27 @@ except ImportError:
     class _DummyUI:
         class View:
             def __init__(self, *args: Any, **kwargs: Any) -> None:
-                pass
+                self.children: List[Any] = []
+                for attr_name in dir(self.__class__):
+                    attr = getattr(self.__class__, attr_name, None)
+                    if callable(attr) and getattr(attr, "_is_ui_button", False):
+                        self.children.append(attr)
 
-            def add_item(self, *args: Any, **kwargs: Any) -> None:
-                pass
+            def add_item(self, item: Any, *args: Any, **kwargs: Any) -> None:
+                self.children.append(item)
 
         class Button:
             def __init__(self, *args: Any, **kwargs: Any) -> None:
-                pass
+                self.kwargs = kwargs
 
         @staticmethod
         def button(*args: Any, **kwargs: Any) -> Any:
             def _wrap(fn: Any) -> Any:
+                fn._is_ui_button = True
+                fn._button_kwargs = kwargs
                 return fn
             return _wrap
+
 
     class _DummyEmbed:
         def __init__(self, **kw: Any) -> None:
@@ -163,6 +170,7 @@ from app.services.music_service import (
     invalidate_stream_cache,
     recommend_autoplay_tracks,
     resolve_spotify_link,
+    resolve_youtube_link,
     search_songs_with_singer,
 )
 from app.services.queue import GuildQueueService, queue_service as default_queue_service
@@ -494,12 +502,25 @@ def _needs_stream_extraction(url: Optional[str]) -> bool:
     return any(dom in lowered for dom in webpage_domains)
 
 
+def _build_track_stream_query(track_obj: Any) -> str:
+    src = str(getattr(track_obj, "source_url", "") or "").strip()
+    if src and ("youtube.com/watch" in src or "youtu.be/" in src):
+        return src
+    t_title = str(getattr(track_obj, "title", "") or "").strip()
+    t_artist = str(getattr(track_obj, "artist", "") or "").strip()
+    if t_artist and t_artist.lower() not in ("spotify artist", "unknown artist", "youtube music"):
+        return f"{t_artist} - {t_title}".strip()
+    return t_title or src
+
+
 def _fetch_youtube_alt_stream_fallback(title: str, artist: str) -> Optional[Dict[str, Any]]:
     """
     Fallback pencarian direct audio stream melalui YouTube HTTP Search + yt-dlp
-    apabila query utama gagal diekstrak (100% YouTube & Spotify, bebas dari Apple Music / iTunes).
+    apabila query utama gagal diekstrak (menjaga kecocokan versi original vs DJ/Remix/Slowed).
     """
-    query = f"{title} {artist} audio".strip()
+    clean_t = (title or "").strip()
+    clean_a = (artist or "").strip()
+    query = f"{clean_a} - {clean_t}".strip(" -") if clean_a and clean_a.lower() != "spotify artist" else clean_t
     if not query:
         return None
     try:
@@ -699,6 +720,7 @@ def build_discord_bot(
             self._voice_exp_task: Optional[asyncio.Task] = None
             self._waskita_sync_task: Optional[asyncio.Task] = None
             self._daily_reminder_task: Optional[asyncio.Task] = None
+            self._voice_connect_locks: Dict[str, asyncio.Lock] = {}
             self._active_vc_track_id: Dict[str, str] = {}
             self._active_vc_volume: Dict[str, int] = {}
             self._track_user_agents: Dict[str, str] = {}
@@ -707,6 +729,8 @@ def build_discord_bot(
             self._last_sync_attempt: Dict[str, float] = {}
             self._track_started_mono: Dict[str, float] = {}
             self._track_pause_mono: Dict[str, float] = {}
+            self._track_stopped_mono: Dict[str, float] = {}
+            self._last_web_pos_notify: Dict[str, float] = {}
             self._prefetch_tasks: Dict[str, asyncio.Task] = {}
             queue_service.register_listener(self._on_queue_event)
 
@@ -714,6 +738,11 @@ def build_discord_bot(
             if guild_id not in self._guild_locks:
                 self._guild_locks[guild_id] = asyncio.Lock()
             return self._guild_locks[guild_id]
+
+        def _get_connect_lock(self, guild_id: str) -> asyncio.Lock:
+            if guild_id not in self._voice_connect_locks:
+                self._voice_connect_locks[guild_id] = asyncio.Lock()
+            return self._voice_connect_locks[guild_id]
 
         async def _notify_web(self, guild_id: str) -> None:
             try:
@@ -749,12 +778,7 @@ def build_discord_bot(
                     for q_item in candidates:
                         if not _needs_stream_extraction(q_item.stream_url):
                             continue
-                        target_q = (
-                            q_item.source_url
-                            if q_item.source_url
-                            and ("youtube.com/watch" in q_item.source_url or "youtu.be/" in q_item.source_url)
-                            else f"ytsearch1:{q_item.title} {q_item.artist} official audio"
-                        )
+                        target_q = _build_track_stream_query(q_item)
                         info = await asyncio.to_thread(extract_playable_stream_ytdlp, target_q)
                         if info and info.get("stream_url") and not _needs_stream_extraction(str(info["stream_url"])):
                             q_item.stream_url = str(info["stream_url"])
@@ -781,12 +805,7 @@ def build_discord_bot(
                         )
                         if auto_cands:
                             first_auto = auto_cands[0]
-                            auto_q = (
-                                first_auto.source_url
-                                if first_auto.source_url
-                                and ("youtube.com/watch" in first_auto.source_url or "youtu.be/" in first_auto.source_url)
-                                else f"ytsearch1:{first_auto.title} {first_auto.artist} official audio"
-                            )
+                            auto_q = _build_track_stream_query(first_auto)
                             auto_info = await asyncio.to_thread(extract_playable_stream_ytdlp, auto_q)
                             if auto_info and auto_info.get("stream_url") and not _needs_stream_extraction(str(auto_info["stream_url"])):
                                 first_auto.stream_url = str(auto_info["stream_url"])
@@ -869,6 +888,7 @@ def build_discord_bot(
                             self._playback_gen[guild_id] = self._playback_gen.get(guild_id, 0) + 1
                             self._active_vc_track_id.pop(guild_id, None)
                             self._syncing_track_key.pop(guild_id, None)
+                            self._track_stopped_mono.pop(guild_id, None)
                             if vc and (vc.is_playing() or vc.is_paused()):
                                 vc.stop()
                         self._schedule_coro(
@@ -905,6 +925,7 @@ def build_discord_bot(
                     self._playback_gen[guild_id] = self._playback_gen.get(guild_id, 0) + 1
                     self._active_vc_track_id.pop(guild_id, None)
                     self._syncing_track_key.pop(guild_id, None)
+                    self._track_stopped_mono.pop(guild_id, None)
                     st_curr.is_loading_stream = False
                     if vc and (vc.is_playing() or vc.is_paused()):
                         vc.stop()
@@ -1007,12 +1028,12 @@ def build_discord_bot(
         async def _playback_ticker_loop(self) -> None:
             """
             Mengupdate posisi detik lagu yang sedang diputar di Discord Voice agar sinkron 100% dengan Web UI,
-            serta menghormati proses auto-reconnect internal discord.py agar tidak terjadi tabrakan handshake.
+            tanpa pernah melakukan force-restart lagu yang sudah selesai diputar.
             """
             vc_disconnect_mono: Dict[str, float] = {}
 
             while not self.is_closed():
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(0.5)
                 now_ts = time.monotonic()
                 for g in self.guilds:
                     gid = str(g.id)
@@ -1030,21 +1051,24 @@ def build_discord_bot(
                         queue_service.advance_track(gid)
                         st = queue_service.get_state(gid)
 
-                    if st.is_loading_stream:
+                    if st.is_loading_stream or gid in self._syncing_track_key:
                         continue
 
                     if is_vc_connected and vc:
                         if not st.current_track or (not st.is_playing and not st.is_paused):
+                            self._track_stopped_mono.pop(gid, None)
                             if vc.is_playing() or vc.is_paused():
                                 self._playback_gen[gid] = self._playback_gen.get(gid, 0) + 1
                                 self._active_vc_track_id.pop(gid, None)
                                 vc.stop()
                                 await self._notify_web(gid)
                         elif st.is_paused:
+                            self._track_stopped_mono.pop(gid, None)
                             if vc.is_playing():
                                 vc.pause()
                                 await self._notify_web(gid)
                         elif vc.is_playing() and st.current_track and not st.is_paused:
+                            self._track_stopped_mono.pop(gid, None)
                             active_tid = self._active_vc_track_id.get(gid)
                             if active_tid and active_tid != st.current_track.item_id:
                                 asyncio.create_task(
@@ -1060,48 +1084,50 @@ def build_discord_bot(
                                     exact_sec = min(st.current_track.duration_sec, exact_sec)
                                 if exact_sec != st.position_sec:
                                     st.position_sec = exact_sec
-                                    await self._notify_web(gid)
+                                    if now_ts - self._last_web_pos_notify.get(gid, 0.0) >= 0.9:
+                                        self._last_web_pos_notify[gid] = now_ts
+                                        await self._notify_web(gid)
                         elif vc.is_paused() and st.current_track and st.is_playing and not st.is_paused:
+                            self._track_stopped_mono.pop(gid, None)
                             vc.resume()
                             await self._notify_web(gid)
                         elif not vc.is_playing() and not vc.is_paused() and st.current_track and st.is_playing and not st.is_paused:
                             active_tid = self._active_vc_track_id.get(gid)
-                            near_end = (
-                                st.current_track.duration_sec > 0
-                                and st.position_sec >= max(5, st.current_track.duration_sec - 4)
-                            )
-                            if active_tid and active_tid == st.current_track.item_id and near_end:
-                                if now_ts - self._last_sync_attempt.get(gid, 0.0) >= 3.0:
-                                    self._last_sync_attempt[gid] = now_ts
+                            if active_tid and active_tid == st.current_track.item_id:
+                                # Lagu baru saja selesai diputar di FFmpeg; biarkan callback _after_track memajukan lagu.
+                                # Jika dalam 3.5 detik _after_track belum memajukan lagu, panggil _handle_track_finished sebagai fallback aman.
+                                stopped_since = self._track_stopped_mono.setdefault(gid, now_ts)
+                                if now_ts - stopped_since >= 3.5:
+                                    self._track_stopped_mono.pop(gid, None)
                                     asyncio.create_task(self._handle_track_finished(gid))
-                            elif now_ts - self._last_sync_attempt.get(gid, 0.0) >= 4.0:
-                                self._last_sync_attempt[gid] = now_ts
-                                resume_sec = st.position_sec if st.position_sec > 3 else 0
-                                asyncio.create_task(
-                                    self.start_or_sync_voice_playback(
-                                        gid,
-                                        st.current_track.requester_id,
-                                        seek_seconds=resume_sec,
-                                        force_restart=True,
+                            else:
+                                # Lagu aktif di state belum pernah mulai diputar di VoiceClient
+                                self._track_stopped_mono.pop(gid, None)
+                                if now_ts - self._last_sync_attempt.get(gid, 0.0) >= 3.5:
+                                    self._last_sync_attempt[gid] = now_ts
+                                    asyncio.create_task(
+                                        self.start_or_sync_voice_playback(
+                                            gid,
+                                            st.current_track.requester_id,
+                                            seek_seconds=0,
+                                        )
                                     )
-                                )
                     else:
-                        if vc is not None and (now_ts - vc_disconnect_mono.get(gid, now_ts)) < 18.0:
+                        if vc is not None and (now_ts - vc_disconnect_mono.get(gid, now_ts)) < 15.0:
                             continue
 
                         if st.current_track and st.is_playing and not st.is_paused:
                             has_humans_in_vc = any(
                                 any(not m.bot for m in ch.members) for ch in g.voice_channels
                             )
-                            if not self._is_unplayed_seed_track(gid, st) or has_humans_in_vc:
-                                if now_ts - self._last_sync_attempt.get(gid, 0.0) >= 10.0:
+                            if not self._is_unplayed_seed_track(gid, st) and has_humans_in_vc:
+                                if now_ts - self._last_sync_attempt.get(gid, 0.0) >= 8.0:
                                     self._last_sync_attempt[gid] = now_ts
-                                    resume_sec = st.position_sec if st.position_sec > 3 else 0
                                     asyncio.create_task(
                                         self.start_or_sync_voice_playback(
                                             gid,
                                             st.current_track.requester_id,
-                                            seek_seconds=resume_sec,
+                                            seek_seconds=0,
                                         )
                                     )
 
@@ -1344,95 +1370,101 @@ def build_discord_bot(
                 logger.warning("Guild %s tidak ditemukan saat akan join voice.", guild_id)
                 return None
 
-            st = queue_service.get_state(guild_id)
-            vc: Optional[discord.VoiceClient] = guild.voice_client  # type: ignore
+            async with self._get_connect_lock(guild_id):
+                st = queue_service.get_state(guild_id)
+                vc: Optional[discord.VoiceClient] = guild.voice_client  # type: ignore
 
-            # 1. JIKA BOT SUDAH CONNECT DI VOICE:
-            # Jangan pernah pindah channel sendiri (kecuali dipindah manual oleh user di Discord)!
-            if vc is not None:
-                if vc.is_connected():
-                    if vc.channel:
-                        st.voice_channel_id = str(vc.channel.id)
-                        st.voice_channel_name = vc.channel.name
-                    return vc
+                # 1. JIKA BOT SUDAH CONNECT DI VOICE:
+                # Jangan pernah pindah channel sendiri (kecuali dipindah manual oleh user di Discord)!
+                if vc is not None:
+                    if vc.is_connected():
+                        if vc.channel:
+                            st.voice_channel_id = str(vc.channel.id)
+                            st.voice_channel_name = vc.channel.name
+                        return vc
 
-                # Tunggu hingga 5 detik jika discord.py sedang auto-reconnect internal (code 1006)
-                for _ in range(20):
-                    await asyncio.sleep(0.25)
-                    vc_check: Optional[discord.VoiceClient] = guild.voice_client  # type: ignore
-                    if vc_check and vc_check.is_connected():
-                        if vc_check.channel:
-                            st.voice_channel_id = str(vc_check.channel.id)
-                            st.voice_channel_name = vc_check.channel.name
-                        return vc_check
+                    # Tunggu hingga 5 detik jika discord.py sedang auto-reconnect internal (code 1006)
+                    for _ in range(20):
+                        await asyncio.sleep(0.25)
+                        vc_check: Optional[discord.VoiceClient] = guild.voice_client  # type: ignore
+                        if vc_check and vc_check.is_connected():
+                            if vc_check.channel:
+                                st.voice_channel_id = str(vc_check.channel.id)
+                                st.voice_channel_name = vc_check.channel.name
+                            return vc_check
+
+                    try:
+                        await vc.disconnect(force=True)
+                        await asyncio.sleep(0.6)
+                    except Exception:
+                        pass
+
+                # 2. JIKA BOT BELUM CONNECT DI VOICE:
+                target_channel: Optional[discord.VoiceChannel] = None
+
+                if requester_user_id and str(requester_user_id).isdigit():
+                    member = guild.get_member(int(requester_user_id))
+                    if not member:
+                        try:
+                            member = await guild.fetch_member(int(requester_user_id))
+                        except Exception:
+                            member = None
+                    if member and member.voice and isinstance(member.voice.channel, discord.VoiceChannel):
+                        target_channel = member.voice.channel
+
+                # Fallback 1: gunakan preferred_channel_id jika ada member manusia di dalamnya atau mode 24/7 / web control
+                if not target_channel and preferred_channel_id and str(preferred_channel_id).isdigit():
+                    ch = guild.get_channel(int(preferred_channel_id))
+                    if isinstance(ch, discord.VoiceChannel):
+                        if st.mode_247 or any(not getattr(m, "bot", False) for m in ch.members) or not str(requester_user_id or "").isdigit():
+                            target_channel = ch
+
+                # Fallback 2: cari voice channel mana pun di guild yang sedang berisi member manusia
+                if not target_channel:
+                    for ch in getattr(guild, "voice_channels", []) or []:
+                        if any(not getattr(m, "bot", False) for m in getattr(ch, "members", [])):
+                            target_channel = ch
+                            break
+
+                # Fallback 3: jika mode 24/7 aktif, masuk ke voice channel pertama yang tersedia di guild
+                if not target_channel and st.mode_247:
+                    vcs = getattr(guild, "voice_channels", []) or []
+                    if vcs:
+                        target_channel = vcs[0]
+
+                if not target_channel:
+                    logger.info(
+                        "Batal join voice di Guild %s: Tidak ditemukan Voice Channel aktif untuk requester (%s).",
+                        guild.name,
+                        requester_user_id,
+                    )
+                    return None
+
+                st.voice_channel_id = str(target_channel.id)
+                st.voice_channel_name = target_channel.name
 
                 try:
-                    await vc.disconnect(force=True)
-                    await asyncio.sleep(0.6)
-                except Exception:
-                    pass
-
-            # 2. JIKA BOT BELUM CONNECT DI VOICE:
-            target_channel: Optional[discord.VoiceChannel] = None
-
-            if requester_user_id and str(requester_user_id).isdigit():
-                member = guild.get_member(int(requester_user_id))
-                if not member:
-                    try:
-                        member = await guild.fetch_member(int(requester_user_id))
-                    except Exception:
-                        member = None
-                if member and member.voice and isinstance(member.voice.channel, discord.VoiceChannel):
-                    target_channel = member.voice.channel
-
-            # Fallback 1: gunakan preferred_channel_id jika ada member manusia di dalamnya atau mode 24/7 / web control
-            if not target_channel and preferred_channel_id and str(preferred_channel_id).isdigit():
-                ch = guild.get_channel(int(preferred_channel_id))
-                if isinstance(ch, discord.VoiceChannel):
-                    if st.mode_247 or any(not getattr(m, "bot", False) for m in ch.members) or not str(requester_user_id or "").isdigit():
-                        target_channel = ch
-
-            # Fallback 2: cari voice channel mana pun di guild yang sedang berisi member manusia
-            if not target_channel:
-                for ch in getattr(guild, "voice_channels", []) or []:
-                    if any(not getattr(m, "bot", False) for m in getattr(ch, "members", [])):
-                        target_channel = ch
-                        break
-
-            # Fallback 3: jika mode 24/7 aktif, masuk ke voice channel pertama yang tersedia di guild
-            if not target_channel and st.mode_247:
-                vcs = getattr(guild, "voice_channels", []) or []
-                if vcs:
-                    target_channel = vcs[0]
-
-            if not target_channel:
-                logger.info(
-                    "Batal join voice di Guild %s: Tidak ditemukan Voice Channel aktif untuk requester (%s).",
-                    guild.name,
-                    requester_user_id,
-                )
-                return None
-
-            st.voice_channel_id = str(target_channel.id)
-            st.voice_channel_name = target_channel.name
-
-            try:
-                vc = await target_channel.connect(timeout=15.0, reconnect=True, self_deaf=True)
-                logger.info(
-                    "Berhasil bergabung ke Voice Channel '%s' (ID: %s) di server %s.",
-                    target_channel.name,
-                    target_channel.id,
-                    guild.name,
-                )
-                return vc
-            except Exception as exc:
-                logger.error(
-                    "Gagal menghubungkan ke Voice Channel '%s' (ID: %s): %s",
-                    target_channel.name,
-                    target_channel.id,
-                    exc,
-                )
-                return None
+                    vc = await target_channel.connect(timeout=15.0, reconnect=True, self_deaf=True)
+                    logger.info(
+                        "Berhasil bergabung ke Voice Channel '%s' (ID: %s) di server %s.",
+                        target_channel.name,
+                        target_channel.id,
+                        guild.name,
+                    )
+                    return vc
+                except discord.ClientException:
+                    vc_now: Optional[discord.VoiceClient] = guild.voice_client  # type: ignore
+                    if vc_now and vc_now.is_connected():
+                        return vc_now
+                    return None
+                except Exception as exc:
+                    logger.error(
+                        "Gagal menghubungkan ke Voice Channel '%s' (ID: %s): %s",
+                        target_channel.name,
+                        target_channel.id,
+                        exc,
+                    )
+                    return None
 
         async def start_or_sync_voice_playback(
             self,
@@ -1452,7 +1484,7 @@ def build_discord_bot(
             guild_obj = self.get_guild(int(guild_id)) if guild_id.isdigit() else None
             vc_existing: Optional[discord.VoiceClient] = guild_obj.voice_client if guild_obj else None  # type: ignore
 
-            if self._syncing_track_key.get(guild_id) == sync_key:
+            if not force_restart and self._syncing_track_key.get(guild_id) == sync_key:
                 return True
 
             if not force_restart:
@@ -1473,6 +1505,7 @@ def build_discord_bot(
 
             self._syncing_track_key[guild_id] = sync_key
             self._last_sync_attempt[guild_id] = time.monotonic()
+            self._track_stopped_mono.pop(guild_id, None)
             self._playback_gen[guild_id] = self._playback_gen.get(guild_id, 0) + 1
             my_gen = self._playback_gen[guild_id]
             st.is_loading_stream = True
@@ -1485,14 +1518,14 @@ def build_discord_bot(
             await self._notify_web(guild_id)
 
             try:
+                if force_restart and seek_seconds == 0 and track.source_type != "radio":
+                    if track.source_url:
+                        invalidate_stream_cache(track.source_url)
+                    track.stream_url = ""
+
                 stream_url = track.stream_url if not _needs_stream_extraction(track.stream_url) else ""
                 if not stream_url:
-                    target_query = (
-                        track.source_url
-                        if track.source_url
-                        and ("youtube.com/watch" in track.source_url or "youtu.be/" in track.source_url)
-                        else f"ytsearch1:{track.title} {track.artist} official audio"
-                    )
+                    target_query = _build_track_stream_query(track)
                     info = await asyncio.to_thread(extract_playable_stream_ytdlp, target_query)
                     if info and info.get("stream_url") and not _needs_stream_extraction(str(info["stream_url"])):
                         stream_url = str(info["stream_url"])
@@ -1564,12 +1597,38 @@ def build_discord_bot(
                     if vc.is_playing() or vc.is_paused():
                         vc.stop()
 
+                    play_start_mono = time.monotonic()
+
                     def _after_track(err: Optional[Exception]) -> None:
                         if err:
                             logger.warning("FFmpeg playback error di guild %s: %s", guild_id, err)
                             if track.source_url:
                                 invalidate_stream_cache(track.source_url)
                         if self._playback_gen.get(guild_id) != my_gen:
+                            return
+                        elapsed_play = time.monotonic() - play_start_mono
+                        # Jika stream putus mendadak (<2.5 detik sejak mulai) dan bukan karena seek di ujung lagu,
+                        # re-extract stream URL segar sekali lagi agar lagu tidak ter-skip sia-sia.
+                        if (
+                            elapsed_play < 2.5
+                            and seek_seconds == 0
+                            and track.source_type != "radio"
+                            and not getattr(track, "_retried_fresh_stream", False)
+                        ):
+                            setattr(track, "_retried_fresh_stream", True)
+                            if track.source_url:
+                                invalidate_stream_cache(track.source_url)
+                            track.stream_url = ""
+                            if self.loop and self.loop.is_running():
+                                asyncio.run_coroutine_threadsafe(
+                                    self.start_or_sync_voice_playback(
+                                        guild_id,
+                                        track.requester_id,
+                                        seek_seconds=0,
+                                        force_restart=True,
+                                    ),
+                                    self.loop,
+                                )
                             return
                         if self.loop and self.loop.is_running():
                             asyncio.run_coroutine_threadsafe(
@@ -1581,7 +1640,7 @@ def build_discord_bot(
                             stream_url,
                             executable=ffmpeg_bin,
                             before_options=before_opts,
-                            options="-vn -b:a 192k -bufsize 1024k",
+                            options="-vn -af aresample=async=1:first_pts=0",
                         )
                         audio_source: Any = discord.PCMVolumeTransformer(pcm_audio, volume=vol_float)
                     except Exception:
@@ -1591,7 +1650,7 @@ def build_discord_bot(
                             bitrate=128,
                             executable=ffmpeg_bin,
                             before_options=before_opts,
-                            options=f'-vn -b:a 128k -bufsize 1024k -filter:a "{af_chain}"',
+                            options=f'-vn -filter:a "{af_chain}"',
                         )
 
                     vc.play(audio_source, after=_after_track)
@@ -1603,6 +1662,7 @@ def build_discord_bot(
                     self._last_sync_attempt[guild_id] = time.monotonic()
                     self._track_started_mono[guild_id] = time.monotonic() - float(seek_seconds)
                     self._track_pause_mono.pop(guild_id, None)
+                    self._track_stopped_mono.pop(guild_id, None)
                     st.position_sec = int(seek_seconds)
                     st.is_loading_stream = False
                     await self._notify_web(guild_id)
@@ -1634,6 +1694,7 @@ def build_discord_bot(
 
             self._active_vc_track_id.pop(guild_id, None)
             self._syncing_track_key.pop(guild_id, None)
+            self._track_stopped_mono.pop(guild_id, None)
             self._last_sync_attempt[guild_id] = time.monotonic()
 
             st = queue_service.get_state(guild_id)
@@ -1691,6 +1752,7 @@ def build_discord_bot(
                 self._active_vc_track_id.pop(guild_id, None)
                 self._active_vc_volume.pop(guild_id, None)
                 self._syncing_track_key.pop(guild_id, None)
+                self._track_stopped_mono.pop(guild_id, None)
                 st.is_loading_stream = False
                 if vc:
                     if vc.is_playing() or vc.is_paused():
@@ -1915,7 +1977,20 @@ def build_discord_bot(
                 or (interaction.guild and interaction.guild.owner_id == user.id)
             )
             roles = [str(r.id) for r in user.roles]
-        return str(user.id), user.display_name, roles, is_admin, is_admin
+            for r in user.roles:
+                rname = str(getattr(r, "name", "") or "").strip().lower()
+                if rname in ("dj", "athenaa dj", "role dj", "music dj"):
+                    roles.append("role-dj")
+                    guild_id_str = str(interaction.guild_id or settings.main_guild_id)
+                    cfg_dj = bot._get_guild_dj_role_id(guild_id_str)
+                    if cfg_dj and cfg_dj not in roles:
+                        roles.append(cfg_dj)
+        return str(user.id), user.display_name, roles, is_admin, False
+
+    def _has_guild_dj_role(guild_id: str, roles: List[str]) -> Tuple[str, bool]:
+        dj_role_id = bot._get_guild_dj_role_id(guild_id)
+        has_dj = (dj_role_id in roles) or ("role-dj" in roles)
+        return dj_role_id, has_dj
 
     # =========================================================================
     # Modern Interactive Music Player Embed & Control View
@@ -1959,7 +2034,7 @@ def build_discord_bot(
         )
         emb.add_field(
             name="Volume & Mode",
-            value=f"🔊 `{st.volume}%` • Loop `{st.loop_mode.upper()}` • Auto `{'ON' if st.autoplay else 'OFF'}`",
+            value=f"🔊 `{st.volume}%` • Loop `{st.loop_mode.upper()}` • Auto `{'ON' if st.autoplay else 'OFF'}` • 24/7 `{'ON' if st.mode_247 else 'OFF'}`",
             inline=True,
         )
 
@@ -1994,14 +2069,23 @@ def build_discord_bot(
                 ("🔀 Shuffle", discord.ButtonStyle.secondary, 0, self._on_shuffle),
                 ("🔉 Vol -10%", discord.ButtonStyle.secondary, 1, self._on_vol_down),
                 ("🔊 Vol +10%", discord.ButtonStyle.secondary, 1, self._on_vol_up),
-                ("🎤 Lirik", discord.ButtonStyle.secondary, 1, self._on_lyrics),
-                ("📋 Antrean", discord.ButtonStyle.secondary, 1, self._on_queue),
+                ("📻 Autoplay", discord.ButtonStyle.secondary, 1, self._on_autoplay),
+                ("🌙 24/7", discord.ButtonStyle.secondary, 1, self._on_mode_247),
                 ("🔄 Refresh", discord.ButtonStyle.secondary, 1, self._on_refresh),
+                ("🎤 Lirik", discord.ButtonStyle.secondary, 2, self._on_lyrics),
+                ("📋 Antrean", discord.ButtonStyle.secondary, 2, self._on_queue),
             ]
             for label, style, row, handler in controls:
                 btn = discord.ui.Button(label=label, style=style, row=row)
                 btn.callback = handler
                 self.add_item(btn)
+
+        async def _send_denied(self, interaction: discord.Interaction, message: str) -> None:
+            emb = _make_embed(title="🔒 Akses Ditolak", description=message, color=0xEF4444)
+            if interaction.response.is_done():
+                await interaction.followup.send(embed=emb, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=emb, ephemeral=True)
 
         async def _on_toggle_pause(self, interaction: discord.Interaction) -> None:
             st = queue_service.get_state(self.guild_id)
@@ -2010,21 +2094,25 @@ def build_discord_bot(
                 return
             action = "resume" if st.is_paused else "pause"
             uid, _, roles, is_admin, is_owner = _member_context(interaction)
-            queue_service.control_playback(
-                guild_id=self.guild_id,
-                action=action,
-                actor_id=uid,
-                user_roles=roles,
-                is_admin=is_admin,
-                is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
-            )
-            await bot.apply_web_control(self.guild_id, action)
-            await interaction.response.edit_message(
-                embed=_build_now_playing_embed(self.guild_id),
-                view=self,
-            )
+            dj_role_id, has_dj = _has_guild_dj_role(self.guild_id, roles)
+            try:
+                queue_service.control_playback(
+                    guild_id=self.guild_id,
+                    action=action,
+                    actor_id=uid,
+                    user_roles=roles,
+                    is_admin=is_admin,
+                    is_owner=is_owner,
+                    dj_role_id=dj_role_id,
+                    has_dj_role=has_dj,
+                )
+                asyncio.create_task(bot.apply_web_control(self.guild_id, action))
+                await interaction.response.edit_message(
+                    embed=_build_now_playing_embed(self.guild_id),
+                    view=self,
+                )
+            except (PermissionError, ValueError, KeyError) as exc:
+                await self._send_denied(interaction, str(exc))
 
         async def _on_skip(self, interaction: discord.Interaction) -> None:
             st = queue_service.get_state(self.guild_id)
@@ -2032,64 +2120,76 @@ def build_discord_bot(
                 await interaction.response.send_message("📭 Antrean musik sedang kosong.", ephemeral=True)
                 return
             uid, _, roles, is_admin, is_owner = _member_context(interaction)
-            queue_service.control_playback(
-                guild_id=self.guild_id,
-                action="skip",
-                actor_id=uid,
-                user_roles=roles,
-                is_admin=is_admin,
-                is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
-            )
-            await bot.apply_web_control(self.guild_id, "skip")
-            await interaction.response.edit_message(
-                embed=_build_now_playing_embed(self.guild_id),
-                view=self,
-            )
+            dj_role_id, has_dj = _has_guild_dj_role(self.guild_id, roles)
+            try:
+                queue_service.control_playback(
+                    guild_id=self.guild_id,
+                    action="skip",
+                    actor_id=uid,
+                    user_roles=roles,
+                    is_admin=is_admin,
+                    is_owner=is_owner,
+                    dj_role_id=dj_role_id,
+                    has_dj_role=has_dj,
+                )
+                asyncio.create_task(bot.apply_web_control(self.guild_id, "skip"))
+                await interaction.response.edit_message(
+                    embed=_build_now_playing_embed(self.guild_id),
+                    view=self,
+                )
+            except (PermissionError, ValueError, KeyError) as exc:
+                await self._send_denied(interaction, str(exc))
 
         async def _on_stop(self, interaction: discord.Interaction) -> None:
             uid, _, roles, is_admin, is_owner = _member_context(interaction)
-            queue_service.control_playback(
-                guild_id=self.guild_id,
-                action="stop",
-                actor_id=uid,
-                user_roles=roles,
-                is_admin=is_admin,
-                is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
-            )
-            await bot.apply_web_control(self.guild_id, "stop")
-            stop_emb = _make_embed(
-                title="⏹️ Pemutaran Dihentikan",
-                description=f"Pemutaran dihentikan dan antrean dibersihkan oleh **{interaction.user.display_name}**.",
-                color=0xEF4444,
-                category_label="Athenaa Music Controller",
-            )
-            await interaction.response.edit_message(embed=stop_emb, view=self)
+            dj_role_id, has_dj = _has_guild_dj_role(self.guild_id, roles)
+            try:
+                queue_service.control_playback(
+                    guild_id=self.guild_id,
+                    action="stop",
+                    actor_id=uid,
+                    user_roles=roles,
+                    is_admin=is_admin,
+                    is_owner=is_owner,
+                    dj_role_id=dj_role_id,
+                    has_dj_role=has_dj,
+                )
+                asyncio.create_task(bot.apply_web_control(self.guild_id, "stop"))
+                stop_emb = _make_embed(
+                    title="⏹️ Pemutaran Dihentikan",
+                    description=f"Pemutaran dihentikan dan antrean dibersihkan oleh **{interaction.user.display_name}**.",
+                    color=0xEF4444,
+                    category_label="Athenaa Music Controller",
+                )
+                await interaction.response.edit_message(embed=stop_emb, view=self)
+            except (PermissionError, ValueError, KeyError) as exc:
+                await self._send_denied(interaction, str(exc))
 
         async def _on_loop(self, interaction: discord.Interaction) -> None:
             st = queue_service.get_state(self.guild_id)
             cycle = {"off": "queue", "queue": "one", "one": "off"}
             next_mode = cycle.get(st.loop_mode, "off")
             uid, _, roles, is_admin, is_owner = _member_context(interaction)
-            queue_service.control_playback(
-                guild_id=self.guild_id,
-                action="loop",
-                actor_id=uid,
-                user_roles=roles,
-                is_admin=is_admin,
-                is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
-                value=next_mode,
-            )
-            await bot._notify_web(self.guild_id)
-            await interaction.response.edit_message(
-                embed=_build_now_playing_embed(self.guild_id),
-                view=self,
-            )
+            dj_role_id, has_dj = _has_guild_dj_role(self.guild_id, roles)
+            try:
+                queue_service.control_playback(
+                    guild_id=self.guild_id,
+                    action="loop",
+                    actor_id=uid,
+                    user_roles=roles,
+                    is_admin=is_admin,
+                    is_owner=is_owner,
+                    dj_role_id=dj_role_id,
+                    has_dj_role=has_dj,
+                    value=next_mode,
+                )
+                asyncio.create_task(bot._notify_web(self.guild_id))
+                await interaction.response.edit_message(
+                    embed=_build_now_playing_embed(self.guild_id),
+                    view=self,
+                )
+            except (PermissionError, ValueError, KeyError) as exc:
+                await self._send_denied(interaction, str(exc))
 
         async def _on_shuffle(self, interaction: discord.Interaction) -> None:
             st = queue_service.get_state(self.guild_id)
@@ -2100,63 +2200,141 @@ def build_discord_bot(
                 )
                 return
             uid, _, roles, is_admin, is_owner = _member_context(interaction)
-            queue_service.control_playback(
-                guild_id=self.guild_id,
-                action="shuffle",
-                actor_id=uid,
-                user_roles=roles,
-                is_admin=is_admin,
-                is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
-            )
-            await bot._notify_web(self.guild_id)
-            await interaction.response.edit_message(
-                embed=_build_now_playing_embed(self.guild_id),
-                view=self,
-            )
+            dj_role_id, has_dj = _has_guild_dj_role(self.guild_id, roles)
+            try:
+                queue_service.control_playback(
+                    guild_id=self.guild_id,
+                    action="shuffle",
+                    actor_id=uid,
+                    user_roles=roles,
+                    is_admin=is_admin,
+                    is_owner=is_owner,
+                    dj_role_id=dj_role_id,
+                    has_dj_role=has_dj,
+                )
+                asyncio.create_task(bot._notify_web(self.guild_id))
+                await interaction.response.edit_message(
+                    embed=_build_now_playing_embed(self.guild_id),
+                    view=self,
+                )
+            except (PermissionError, ValueError, KeyError) as exc:
+                await self._send_denied(interaction, str(exc))
 
         async def _on_vol_down(self, interaction: discord.Interaction) -> None:
             st = queue_service.get_state(self.guild_id)
             new_vol = max(10, st.volume - 10)
             uid, _, roles, is_admin, is_owner = _member_context(interaction)
-            queue_service.control_playback(
-                guild_id=self.guild_id,
-                action="volume",
-                actor_id=uid,
-                user_roles=roles,
-                is_admin=is_admin,
-                is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
-                value=new_vol,
-            )
-            await bot.apply_web_control(self.guild_id, "volume", new_vol)
-            await interaction.response.edit_message(
-                embed=_build_now_playing_embed(self.guild_id),
-                view=self,
-            )
+            dj_role_id, has_dj = _has_guild_dj_role(self.guild_id, roles)
+            try:
+                queue_service.control_playback(
+                    guild_id=self.guild_id,
+                    action="volume",
+                    actor_id=uid,
+                    user_roles=roles,
+                    is_admin=is_admin,
+                    is_owner=is_owner,
+                    dj_role_id=dj_role_id,
+                    has_dj_role=has_dj,
+                    value=new_vol,
+                )
+                asyncio.create_task(bot.apply_web_control(self.guild_id, "volume", new_vol))
+                await interaction.response.edit_message(
+                    embed=_build_now_playing_embed(self.guild_id),
+                    view=self,
+                )
+            except (PermissionError, ValueError, KeyError) as exc:
+                await self._send_denied(interaction, str(exc))
 
         async def _on_vol_up(self, interaction: discord.Interaction) -> None:
             st = queue_service.get_state(self.guild_id)
             new_vol = min(100, st.volume + 10)
             uid, _, roles, is_admin, is_owner = _member_context(interaction)
-            queue_service.control_playback(
-                guild_id=self.guild_id,
-                action="volume",
-                actor_id=uid,
-                user_roles=roles,
-                is_admin=is_admin,
-                is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
-                value=new_vol,
-            )
-            await bot.apply_web_control(self.guild_id, "volume", new_vol)
-            await interaction.response.edit_message(
-                embed=_build_now_playing_embed(self.guild_id),
-                view=self,
-            )
+            dj_role_id, has_dj = _has_guild_dj_role(self.guild_id, roles)
+            try:
+                queue_service.control_playback(
+                    guild_id=self.guild_id,
+                    action="volume",
+                    actor_id=uid,
+                    user_roles=roles,
+                    is_admin=is_admin,
+                    is_owner=is_owner,
+                    dj_role_id=dj_role_id,
+                    has_dj_role=has_dj,
+                    value=new_vol,
+                )
+                asyncio.create_task(bot.apply_web_control(self.guild_id, "volume", new_vol))
+                await interaction.response.edit_message(
+                    embed=_build_now_playing_embed(self.guild_id),
+                    view=self,
+                )
+            except (PermissionError, ValueError, KeyError) as exc:
+                await self._send_denied(interaction, str(exc))
+
+        async def _on_autoplay(self, interaction: discord.Interaction) -> None:
+            st = queue_service.get_state(self.guild_id)
+            next_auto = not st.autoplay
+            uid, _, roles, is_admin, is_owner = _member_context(interaction)
+            dj_role_id, has_dj = _has_guild_dj_role(self.guild_id, roles)
+            try:
+                queue_service.control_playback(
+                    guild_id=self.guild_id,
+                    action="autoplay",
+                    actor_id=uid,
+                    user_roles=roles,
+                    is_admin=is_admin,
+                    is_owner=is_owner,
+                    dj_role_id=dj_role_id,
+                    has_dj_role=has_dj,
+                    value=next_auto,
+                )
+                try:
+                    with db_manager.transaction() as conn:
+                        conn.execute(
+                            "UPDATE guild_settings SET autoplay = ?, updated_at = ? WHERE guild_id = ?",
+                            (1 if st.autoplay else 0, datetime.now(timezone.utc).isoformat(), self.guild_id),
+                        )
+                except Exception:
+                    pass
+                asyncio.create_task(bot.apply_web_control(self.guild_id, "autoplay", st.autoplay))
+                await interaction.response.edit_message(
+                    embed=_build_now_playing_embed(self.guild_id),
+                    view=self,
+                )
+            except (PermissionError, ValueError, KeyError) as exc:
+                await self._send_denied(interaction, str(exc))
+
+        async def _on_mode_247(self, interaction: discord.Interaction) -> None:
+            st = queue_service.get_state(self.guild_id)
+            next_247 = not st.mode_247
+            uid, _, roles, is_admin, is_owner = _member_context(interaction)
+            dj_role_id, has_dj = _has_guild_dj_role(self.guild_id, roles)
+            try:
+                queue_service.control_playback(
+                    guild_id=self.guild_id,
+                    action="mode_247",
+                    actor_id=uid,
+                    user_roles=roles,
+                    is_admin=is_admin,
+                    is_owner=is_owner,
+                    dj_role_id=dj_role_id,
+                    has_dj_role=has_dj,
+                    value=next_247,
+                )
+                try:
+                    with db_manager.transaction() as conn:
+                        conn.execute(
+                            "UPDATE guild_settings SET mode_247 = ?, updated_at = ? WHERE guild_id = ?",
+                            (1 if st.mode_247 else 0, datetime.now(timezone.utc).isoformat(), self.guild_id),
+                        )
+                except Exception:
+                    pass
+                asyncio.create_task(bot.apply_web_control(self.guild_id, "mode_247", st.mode_247))
+                await interaction.response.edit_message(
+                    embed=_build_now_playing_embed(self.guild_id),
+                    view=self,
+                )
+            except (PermissionError, ValueError, KeyError) as exc:
+                await self._send_denied(interaction, str(exc))
 
         async def _on_lyrics(self, interaction: discord.Interaction) -> None:
             st = queue_service.get_state(self.guild_id)
@@ -2223,6 +2401,7 @@ def build_discord_bot(
     async def cmd_play(interaction: discord.Interaction, query: str) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, uname, roles, is_admin, is_owner = _member_context(interaction)
+        dj_role_id, has_dj = _has_guild_dj_role(guild_id, roles)
 
         # Wajibkan user berada di Voice Channel sebelum bisa memutar lagu
         user_vc = (
@@ -2268,7 +2447,7 @@ def build_discord_bot(
         st_init = queue_service.get_state(guild_id)
         st_init.voice_channel_id = str(user_vc.id)
         st_init.voice_channel_name = user_vc.name
-        asyncio.create_task(bot.ensure_voice_connected(guild_id, st_init.voice_channel_id, uid))
+        await bot.ensure_voice_connected(guild_id, st_init.voice_channel_id, uid)
 
         kind, target = classify_music_input(query)
         if kind in ("spotify_playlist", "spotify_album", "youtube_playlist"):
@@ -2309,8 +2488,8 @@ def build_discord_bot(
                         user_roles=roles,
                         is_admin=is_admin,
                         is_owner=is_owner,
-                        dj_role_id=settings.dj_role_id,
-                        has_dj_role=settings.dj_role_id in roles,
+                        dj_role_id=dj_role_id,
+                        has_dj_role=has_dj,
                     )
                     if started:
                         started_first = True
@@ -2350,8 +2529,25 @@ def build_discord_bot(
         try:
             if kind == "spotify_track":
                 cand = await asyncio.to_thread(resolve_spotify_link, query)
+            elif kind == "youtube":
+                yt_cand = await asyncio.to_thread(resolve_youtube_link, query)
+                if yt_cand:
+                    cand = yt_cand
+                else:
+                    results = await asyncio.to_thread(search_songs_with_singer, query, 3)
+                    if not results:
+                        err_emb = _make_embed(
+                            title="🔍 Video YouTube Tidak Dapat Diputar",
+                            description=f"Tidak dapat memuat audio untuk tautan YouTube: `{query}`.",
+                            color=0xEF4444,
+                            category_label="Athenaa Music Search",
+                        )
+                        await interaction.followup.send(embed=err_emb)
+                        return
+                    cand = results[0]
             else:
-                results = await asyncio.to_thread(search_songs_with_singer, target or query, 3)
+                search_q = target if (kind == "search_query" and target) else query
+                results = await asyncio.to_thread(search_songs_with_singer, search_q, 3)
                 if not results:
                     err_emb = _make_embed(
                         title="🔍 Lagu Tidak Ditemukan",
@@ -2391,8 +2587,8 @@ def build_discord_bot(
             user_roles=roles,
             is_admin=is_admin,
             is_owner=is_owner,
-            dj_role_id=settings.dj_role_id,
-            has_dj_role=settings.dj_role_id in roles,
+            dj_role_id=dj_role_id,
+            has_dj_role=has_dj,
         )
 
         st = queue_service.get_state(guild_id)
@@ -2547,6 +2743,7 @@ def build_discord_bot(
     async def cmd_remove(interaction: discord.Interaction, posisi: int) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, _, roles, is_admin, is_owner = _member_context(interaction)
+        dj_role_id, has_dj = _has_guild_dj_role(guild_id, roles)
         st = queue_service.get_state(guild_id)
         if not st.queue:
             await interaction.response.send_message(
@@ -2578,8 +2775,8 @@ def build_discord_bot(
                 user_roles=roles,
                 is_admin=is_admin,
                 is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
+                dj_role_id=dj_role_id,
+                has_dj_role=has_dj,
             )
             await bot._notify_web(guild_id)
             emb = _make_embed(
@@ -2603,6 +2800,7 @@ def build_discord_bot(
     async def cmd_skip(interaction: discord.Interaction) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, _, roles, is_admin, is_owner = _member_context(interaction)
+        dj_role_id, has_dj = _has_guild_dj_role(guild_id, roles)
         try:
             queue_service.control_playback(
                 guild_id=guild_id,
@@ -2611,8 +2809,8 @@ def build_discord_bot(
                 user_roles=roles,
                 is_admin=is_admin,
                 is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
+                dj_role_id=dj_role_id,
+                has_dj_role=has_dj,
             )
             asyncio.create_task(bot.apply_web_control(guild_id, "skip"))
             st = queue_service.get_state(guild_id)
@@ -2633,6 +2831,7 @@ def build_discord_bot(
     async def cmd_pause(interaction: discord.Interaction) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, _, roles, is_admin, is_owner = _member_context(interaction)
+        dj_role_id, has_dj = _has_guild_dj_role(guild_id, roles)
         try:
             queue_service.control_playback(
                 guild_id=guild_id,
@@ -2641,8 +2840,8 @@ def build_discord_bot(
                 user_roles=roles,
                 is_admin=is_admin,
                 is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
+                dj_role_id=dj_role_id,
+                has_dj_role=has_dj,
             )
             asyncio.create_task(bot.apply_web_control(guild_id, "pause"))
             emb = _make_embed(
@@ -2662,6 +2861,7 @@ def build_discord_bot(
     async def cmd_resume(interaction: discord.Interaction) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, _, roles, is_admin, is_owner = _member_context(interaction)
+        dj_role_id, has_dj = _has_guild_dj_role(guild_id, roles)
         try:
             queue_service.control_playback(
                 guild_id=guild_id,
@@ -2670,8 +2870,8 @@ def build_discord_bot(
                 user_roles=roles,
                 is_admin=is_admin,
                 is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
+                dj_role_id=dj_role_id,
+                has_dj_role=has_dj,
             )
             asyncio.create_task(bot.apply_web_control(guild_id, "resume"))
             emb = _make_embed(
@@ -2691,6 +2891,7 @@ def build_discord_bot(
     async def cmd_stop(interaction: discord.Interaction) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, _, roles, is_admin, is_owner = _member_context(interaction)
+        dj_role_id, has_dj = _has_guild_dj_role(guild_id, roles)
         try:
             queue_service.control_playback(
                 guild_id=guild_id,
@@ -2699,8 +2900,8 @@ def build_discord_bot(
                 user_roles=roles,
                 is_admin=is_admin,
                 is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
+                dj_role_id=dj_role_id,
+                has_dj_role=has_dj,
             )
             asyncio.create_task(bot.apply_web_control(guild_id, "stop"))
             emb = _make_embed(
@@ -2720,6 +2921,7 @@ def build_discord_bot(
     async def cmd_shuffle(interaction: discord.Interaction) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, _, roles, is_admin, is_owner = _member_context(interaction)
+        dj_role_id, has_dj = _has_guild_dj_role(guild_id, roles)
         try:
             queue_service.control_playback(
                 guild_id=guild_id,
@@ -2728,8 +2930,8 @@ def build_discord_bot(
                 user_roles=roles,
                 is_admin=is_admin,
                 is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
+                dj_role_id=dj_role_id,
+                has_dj_role=has_dj,
             )
             await bot._notify_web(guild_id)
             emb = _make_embed(
@@ -2749,6 +2951,7 @@ def build_discord_bot(
     async def cmd_volume(interaction: discord.Interaction, persen: int) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, _, roles, is_admin, is_owner = _member_context(interaction)
+        dj_role_id, has_dj = _has_guild_dj_role(guild_id, roles)
         try:
             queue_service.control_playback(
                 guild_id=guild_id,
@@ -2757,11 +2960,11 @@ def build_discord_bot(
                 user_roles=roles,
                 is_admin=is_admin,
                 is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
-                has_dj_role=settings.dj_role_id in roles,
+                dj_role_id=dj_role_id,
+                has_dj_role=has_dj,
                 value=persen,
             )
-            await bot.apply_web_control(guild_id, "volume", persen)
+            asyncio.create_task(bot.apply_web_control(guild_id, "volume", persen))
             emb = _make_embed(
                 title=f"🔊 Volume Diatur ke {persen}%",
                 description=_build_progress_bar(persen, 100),
@@ -2779,6 +2982,7 @@ def build_discord_bot(
     async def cmd_loop(interaction: discord.Interaction, mode: str) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, _, roles, is_admin, is_owner = _member_context(interaction)
+        dj_role_id, has_dj = _has_guild_dj_role(guild_id, roles)
         try:
             queue_service.control_playback(
                 guild_id=guild_id,
@@ -2787,7 +2991,8 @@ def build_discord_bot(
                 user_roles=roles,
                 is_admin=is_admin,
                 is_owner=is_owner,
-                dj_role_id=settings.dj_role_id,
+                dj_role_id=dj_role_id,
+                has_dj_role=has_dj,
                 value=mode.lower(),
             )
             await bot._notify_web(guild_id)
@@ -2809,7 +3014,7 @@ def build_discord_bot(
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, uname, roles, is_admin, is_owner = _member_context(interaction)
         st = queue_service.get_state(guild_id)
-        dj_role_id = bot._get_guild_dj_role_id(guild_id)
+        dj_role_id, has_dj = _has_guild_dj_role(guild_id, roles)
         allowed, reason = check_host_lock_permission(
             user_id=uid,
             user_roles=roles,
@@ -2818,7 +3023,7 @@ def build_discord_bot(
             session_host_id=st.host_user_id,
             dj_role_id=dj_role_id,
             action="autoplay",
-            has_dj_role=dj_role_id in roles,
+            has_dj_role=has_dj,
         )
         if not allowed:
             await interaction.response.send_message(
@@ -2841,7 +3046,7 @@ def build_discord_bot(
             queue_service.advance_track(guild_id)
             if st.current_track:
                 asyncio.create_task(bot.start_or_sync_voice_playback(guild_id, uid))
-        await bot.apply_web_control(guild_id, "autoplay", st.autoplay)
+        asyncio.create_task(bot.apply_web_control(guild_id, "autoplay", st.autoplay))
         emb = _make_embed(
             title=f"📻 Autoplay: {'AKTIF' if aktif else 'NONAKTIF'}",
             description="Bot akan otomatis memutar lagu rekomendasi saat antrean habis." if aktif else "Autoplay dinonaktifkan.",
@@ -2855,7 +3060,7 @@ def build_discord_bot(
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, uname, roles, is_admin, is_owner = _member_context(interaction)
         st = queue_service.get_state(guild_id)
-        dj_role_id = bot._get_guild_dj_role_id(guild_id)
+        dj_role_id, has_dj = _has_guild_dj_role(guild_id, roles)
         allowed, reason = check_host_lock_permission(
             user_id=uid,
             user_roles=roles,
@@ -2864,7 +3069,7 @@ def build_discord_bot(
             session_host_id=st.host_user_id,
             dj_role_id=dj_role_id,
             action="mode_247",
-            has_dj_role=dj_role_id in roles,
+            has_dj_role=has_dj,
         )
         if not allowed:
             await interaction.response.send_message(
@@ -2882,8 +3087,8 @@ def build_discord_bot(
         except Exception:
             pass
         if aktif:
-            await bot.ensure_voice_connected(guild_id, st.voice_channel_id, str(interaction.user.id))
-        await bot.apply_web_control(guild_id, "mode_247", st.mode_247)
+            asyncio.create_task(bot.ensure_voice_connected(guild_id, st.voice_channel_id, str(interaction.user.id)))
+        asyncio.create_task(bot.apply_web_control(guild_id, "mode_247", st.mode_247))
         emb = _make_embed(
             title=f"🌙 Mode 24/7: {'AKTIF' if aktif else 'NONAKTIF'}",
             description="Bot akan tetap berada di Voice Channel selama 24/7." if aktif else "Mode 24/7 dinonaktifkan.",
@@ -2935,6 +3140,7 @@ def build_discord_bot(
     async def cmd_leave(interaction: discord.Interaction) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)
         uid, _, roles, is_admin, is_owner = _member_context(interaction)
+        dj_role_id, has_dj = _has_guild_dj_role(guild_id, roles)
         st = queue_service.get_state(guild_id)
         allowed, reason = check_host_lock_permission(
             user_id=uid,
@@ -2942,9 +3148,9 @@ def build_discord_bot(
             is_admin=is_admin,
             is_owner=is_owner,
             session_host_id=st.host_user_id,
-            dj_role_id=settings.dj_role_id,
+            dj_role_id=dj_role_id,
             action="stop",
-            has_dj_role=settings.dj_role_id in roles,
+            has_dj_role=has_dj,
         )
         if not allowed:
             await interaction.response.send_message(
@@ -2960,12 +3166,13 @@ def build_discord_bot(
             actor_id=uid,
             user_roles=roles,
             is_admin=True,
-            is_owner=True,
-            dj_role_id=settings.dj_role_id,
-            has_dj_role=settings.dj_role_id in roles,
+            is_owner=False,
+            dj_role_id=dj_role_id,
+            has_dj_role=has_dj,
         )
         bot._playback_gen[guild_id] = bot._playback_gen.get(guild_id, 0) + 1
         bot._active_vc_track_id.pop(guild_id, None)
+        bot._track_stopped_mono.pop(guild_id, None)
         if interaction.guild and interaction.guild.voice_client:
             await interaction.guild.voice_client.disconnect(force=True)
         await bot._notify_web(guild_id)
@@ -3700,4 +3907,5 @@ def build_discord_bot(
             )
             await interaction.response.send_message(embed=emb)
 
+    bot.create_player_control_view = lambda gid: MusicPlayerControlView(gid)
     return bot

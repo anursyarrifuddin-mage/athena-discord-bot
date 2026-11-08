@@ -750,6 +750,151 @@ END:VCALENDAR"""
         self.assertTrue(after_cincin.is_autoplay)
         self.assertNotEqual(after_cincin.title, "Cincin")
 
+    def test_per_server_3role_rbac_and_hidden_codebase(self) -> None:
+        import asyncio
+        from app.web.routes.api import (
+            _get_session_from_token,
+            _issue_single_discord_session,
+            _resolve_role_for_guild,
+            _resolve_static_dir,
+        )
+        from app.bot.client import build_discord_bot
+
+        # 1. Issue session as Admin Server on Server A (111111111111111111)
+        issued = _issue_single_discord_session(
+            user_id="u-admin-server-a",
+            username="AdminA",
+            discord_tag="@admina",
+            role_label="Admin Server",
+            is_owner=False,
+            has_dj_role=True,
+            is_admin=True,
+            guild_id="111111111111111111",
+        )
+        tok = issued["session_token"]
+        self.assertEqual(issued["user"]["role"], "admin")
+        self.assertTrue(issued["user"]["isAdmin"])
+        self.assertFalse(issued["user"]["isOwner"])
+
+        # 2. On Server A (111111111111111111), user resolves to Admin Server
+        sess_a = _get_session_from_token(tok, guild_id="111111111111111111")
+        self.assertIsNotNone(sess_a)
+        self.assertEqual(sess_a["user"]["role"], "admin")
+        self.assertTrue(sess_a["user"]["isAdmin"])
+        self.assertTrue(sess_a["user"]["hasDjRole"])
+        self.assertFalse(sess_a["user"]["isOwner"])
+
+        # 3. On Server B (222222222222222222), the same user is strictly a regular Member!
+        sess_b = _get_session_from_token(tok, guild_id="222222222222222222")
+        self.assertIsNotNone(sess_b)
+        self.assertEqual(sess_b["user"]["role"], "member")
+        self.assertFalse(sess_b["user"]["isAdmin"])
+        self.assertFalse(sess_b["user"]["hasDjRole"])
+        self.assertFalse(sess_b["user"]["isOwner"])
+        self.assertEqual(
+            _resolve_role_for_guild("u-admin-server-a", "222222222222222222", default_main_role="admin"),
+            "member",
+        )
+
+        # 4. Verify pre-built static UI directory resolves and index.html exists
+        static_dir = _resolve_static_dir()
+        self.assertTrue((static_dir / "index.html").exists())
+
+        # 5. Verify MusicPlayerControlView initializes cleanly with all 12 Discord embed buttons
+        bot = build_discord_bot(queue_service=self.queue_svc, academy_service=self.academy_svc)
+
+        async def _build_view():
+            v = bot.create_player_control_view("111111111111111111")
+            return len(v.children)
+
+        btn_count = asyncio.run(_build_view())
+        self.assertEqual(btn_count, 12)
+
+    def test_version_aware_music_matching_and_module_delete(self) -> None:
+        from app.services.music_service import (
+            _clean_youtube_title_and_artist,
+            _extract_vid_from_url_or_registry,
+            _register_track_meta,
+            detect_version_modifiers,
+            do_version_modifiers_match,
+            normalize_exact_version_identity,
+        )
+
+        # 1. Version modifiers detection & strict matching
+        normal_mods = detect_version_modifiers("the weeknd - one of the girls")
+        dj_mods = detect_version_modifiers("DJ One Of The Girls Remix Full Bass")
+        slowed_mods = detect_version_modifiers("One Of The Girls (Slowed + Reverb)")
+        self.assertEqual(normal_mods, set())
+        self.assertTrue({"dj", "remix"}.issubset(dj_mods))
+        self.assertIn("slowed", slowed_mods)
+
+        self.assertTrue(do_version_modifiers_match(normal_mods, set()))
+        self.assertFalse(do_version_modifiers_match(normal_mods, dj_mods))
+        self.assertFalse(do_version_modifiers_match(normal_mods, slowed_mods))
+        self.assertFalse(do_version_modifiers_match(dj_mods, set()))
+        self.assertTrue(do_version_modifiers_match(dj_mods, dj_mods))
+
+        # 2. Title cleaner preserves DJ/Remix/Slowed inside brackets/pipes while removing Official Audio junk
+        t_orig, a_orig = _clean_youtube_title_and_artist(
+            "The Weeknd - One Of The Girls (Official Audio)", "The Weeknd - Topic"
+        )
+        self.assertEqual(t_orig, "One Of The Girls")
+        self.assertEqual(a_orig, "The Weeknd")
+
+        t_dj, a_dj = _clean_youtube_title_and_artist(
+            "The Weeknd - One Of The Girls (DJ Remix Official Audio)", "DJ Opus"
+        )
+        self.assertIn("DJ", t_dj)
+        self.assertIn("Remix", t_dj)
+        self.assertNotIn("Official Audio", t_dj)
+
+        # 3. _TRACK_META_REGISTRY separates original song from DJ/Remix version (never overwrites!)
+        self.assertNotEqual(
+            normalize_exact_version_identity(t_orig, a_orig),
+            normalize_exact_version_identity(t_dj, a_dj),
+        )
+        _register_track_meta(
+            t_orig, a_orig, 244, "https://www.youtube.com/watch?v=ORIG1234567", video_id="ORIG1234567", allow_overwrite=True
+        )
+        _register_track_meta(
+            t_dj, a_dj, 210, "https://www.youtube.com/watch?v=DJRMX123456", video_id="DJRMX123456", allow_overwrite=True
+        )
+        self.assertEqual(_extract_vid_from_url_or_registry("", title=t_orig, artist=a_orig), "ORIG1234567")
+        self.assertEqual(_extract_vid_from_url_or_registry("", title=t_dj, artist=a_dj), "DJRMX123456")
+
+        # 4. Module / attachment deletion removes DB row and stored file
+        guild_id = "1428666546942902294"
+        task = self.academy_svc.create_task(
+            guild_id=guild_id,
+            course_name="IF3130 Jaringan Komputer",
+            title="Tugas Modul Jarkom",
+            deadline_iso="2026-11-25T16:59:00+00:00",
+        )
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO task_attachments (
+                    attachment_id, task_id, guild_id, original_filename,
+                    stored_filename, mime_type, size_bytes, uploaded_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "att-testdel01",
+                    task.task_id,
+                    guild_id,
+                    "Modul_Jarkom_Bab1.pdf",
+                    "0123456789abcdef0123456789abcdef.pdf",
+                    "application/pdf",
+                    4096,
+                    "Aetheriaaa",
+                    "2026-11-08T00:00:00+00:00",
+                ),
+            )
+        deleted = self.academy_svc.delete_attachment(guild_id, "att-testdel01")
+        self.assertIsNotNone(deleted)
+        self.assertEqual(deleted["original_filename"], "Modul_Jarkom_Bab1.pdf")
+        self.assertIsNone(self.academy_svc.delete_attachment(guild_id, "att-testdel01"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -74,22 +74,24 @@ academy_service = AcademyService()
 leveling_service = LevelingService()
 backup_service = BackupService()
 
-STATIC_DIR = BASE_DIR / "app" / "web" / "static"
+def _resolve_static_dir() -> Path:
+    candidates = [
+        BASE_DIR / "app" / "web" / "static",
+        Path(__file__).resolve().parent.parent / "static",
+        BASE_DIR.parent / "dist",
+        Path("app/web/static"),
+        Path("dist"),
+    ]
+    for cand in candidates:
+        try:
+            if (cand / "index.html").is_file():
+                return cand
+        except Exception:
+            pass
+    return BASE_DIR / "app" / "web" / "static"
 
-PYTHON_CODEBASE_FILES = [
-    {"path": "app/main.py", "role": "Entrypoint Utama Pterodactyl (Discord Bot + FastAPI Port 10031)"},
-    {"path": "app/config.py", "role": "Konfigurasi Environment (.env), Port 10031, Domain athenaa.my.id"},
-    {"path": "app/database.py", "role": "Manajer Skema SQLite WAL & Transaksi Aman"},
-    {"path": "app/bot/client.py", "role": "Discord Bot, VoiceClient yt-dlp + FFmpeg, & Slash Commands"},
-    {"path": "app/services/music_service.py", "role": "Mesin Pencarian Lagu + Singer, Resolver Spotify, & Ekstraktor yt-dlp"},
-    {"path": "app/services/queue_service.py", "role": "Antrean Musik Per-Server, Session Host Lock, Autoplay, & Mode 24/7"},
-    {"path": "app/services/lyrics_service.py", "role": "Klien Lirik Tersinkronisasi LRCLIB & Parser Timestamp LRC"},
-    {"path": "app/services/academy_service.py", "role": "Manajemen Tugas Akademik, Sinkronisasi Moodle (.ics), & Reminder 3 Tahap"},
-    {"path": "app/services/leveling_service.py", "role": "Sistem RPG EXP, Leaderboard Top 15, & Status AFK Persisten"},
-    {"path": "app/services/backup_service.py", "role": "Backup SQLite Konsisten Terenkripsi HMAC & Kontrol Worker yt-dlp"},
-    {"path": "app/security/validators.py", "role": "Proteksi SSRF, Validasi Lampiran Modul, & Enkripsi Kredensial"},
-    {"path": "app/web/routes/api.py", "role": "Server FastAPI, WebSocket Real-Time (/ws), & Discord OAuth2 Multi-Session"},
-]
+
+STATIC_DIR = _resolve_static_dir()
 
 UI_CUSTOMIZATION_INJECTION = ""
 
@@ -99,7 +101,7 @@ def _utc_now() -> str:
 
 
 def _ensure_multi_session_table() -> None:
-    """Memastikan tabel discord_user_sessions tersedia untuk mendukung hingga 5 perangkat per akun Discord."""
+    """Memastikan tabel discord_user_sessions dan user_guild_roles tersedia untuk per-server RBAC."""
     try:
         with db_manager.transaction() as conn:
             conn.execute(
@@ -120,11 +122,116 @@ def _ensure_multi_session_table() -> None:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_discord_user_sessions_uid ON discord_user_sessions(user_id, created_at ASC)"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_guild_roles (
+                    user_id TEXT NOT NULL,
+                    guild_id TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'member',
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, guild_id)
+                )
+                """
+            )
     except Exception:
         pass
 
 
 _ensure_multi_session_table()
+
+
+def _set_user_guild_role(user_id: str, guild_id: str, role: str) -> None:
+    clean_uid = str(user_id or "").strip()
+    clean_gid = str(guild_id or "").strip()
+    clean_role = str(role or "member").strip().lower()
+    if clean_role not in ("admin", "dj", "member"):
+        clean_role = "member"
+    if not clean_uid or not clean_gid:
+        return
+    _ensure_multi_session_table()
+    try:
+        with db_manager.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_guild_roles (user_id, guild_id, role, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, guild_id) DO UPDATE SET
+                    role = excluded.role,
+                    updated_at = excluded.updated_at
+                """,
+                (clean_uid, clean_gid, clean_role, _utc_now()),
+            )
+    except Exception:
+        pass
+
+
+def _get_user_guild_roles_map(user_id: str, default_main_role: str = "member") -> Dict[str, str]:
+    clean_uid = str(user_id or "").strip()
+    roles_map: Dict[str, str] = {}
+    if not clean_uid:
+        return roles_map
+    _ensure_multi_session_table()
+    try:
+        with db_manager.transaction() as conn:
+            rows = conn.execute(
+                "SELECT guild_id, role FROM user_guild_roles WHERE user_id = ?",
+                (clean_uid,),
+            ).fetchall()
+            for r in rows:
+                rv = str(r["role"] or "member").lower()
+                roles_map[str(r["guild_id"])] = rv if rv in ("admin", "dj", "member") else "member"
+    except Exception:
+        pass
+    main_gid = str(settings.main_guild_id or "1428666546942902294")
+    if main_gid not in roles_map and default_main_role in ("admin", "dj", "member"):
+        roles_map[main_gid] = default_main_role
+    return roles_map
+
+
+def _resolve_role_for_guild(
+    user_id: str,
+    guild_id: str,
+    default_main_role: str = "member",
+    live_bot: Any = None,
+) -> str:
+    clean_gid = str(guild_id or settings.main_guild_id or "1428666546942902294").strip()
+    clean_uid = str(user_id or "").strip()
+
+    # 1. Jika live Discord Bot aktif dan user adalah member asli di server tersebut, cek permission real-time per-server
+    if live_bot is not None and clean_gid.isdigit() and clean_uid.isdigit():
+        try:
+            g_obj = live_bot.get_guild(int(clean_gid))
+            m_obj = g_obj.get_member(int(clean_uid)) if g_obj else None
+            if m_obj is not None:
+                is_srv_admin = bool(
+                    m_obj.guild_permissions.administrator
+                    or getattr(m_obj.guild_permissions, "manage_guild", False)
+                    or (g_obj and g_obj.owner_id == m_obj.id)
+                )
+                if is_srv_admin:
+                    return "admin"
+                dj_rid = ""
+                if hasattr(live_bot, "_get_guild_dj_role_id"):
+                    dj_rid = str(live_bot._get_guild_dj_role_id(clean_gid) or "")
+                member_role_ids = [str(r.id) for r in getattr(m_obj, "roles", [])]
+                member_role_names = [str(getattr(r, "name", "") or "").strip().lower() for r in getattr(m_obj, "roles", [])]
+                if (dj_rid and dj_rid in member_role_ids) or any(
+                    rn in ("dj", "athenaa dj", "role dj", "music dj") for rn in member_role_names
+                ):
+                    return "dj"
+                return "member"
+        except Exception:
+            pass
+
+    # 2. Cek mapping per-server di database user_guild_roles
+    roles_map = _get_user_guild_roles_map(clean_uid, default_main_role=default_main_role)
+    if clean_gid in roles_map:
+        return roles_map[clean_gid]
+
+    # 3. Di server lain yang belum memiliki izin khusus, otomatis berstatus Member biasa
+    if clean_gid == str(settings.main_guild_id or "1428666546942902294"):
+        return default_main_role if default_main_role in ("admin", "dj", "member") else "member"
+    return "member"
 
 
 def _build_valid_pdf_bytes(title: str, uploader: str, attachment_id: str) -> bytes:
@@ -224,18 +331,25 @@ def _issue_single_discord_session(
     is_owner: bool,
     has_dj_role: bool,
     is_admin: bool,
+    guild_id: Optional[str] = None,
+    guild_roles: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
     Menerbitkan token sesi untuk akun Discord dengan batas maksimal 5 perangkat/sesi aktif (MAX_SESSIONS_PER_USER = 5).
-    Jika user login di perangkat ke-6, sesi paling lama (oldest) akan dihapus otomatis sementara 4 sesi lainnya tetap aktif.
+    Role disimpan spesifik per-server (guild_id), tanpa adanya role Owner global.
     """
     _ensure_multi_session_table()
     new_token = f"athenaa_sess_{user_id}_{secrets.token_hex(12)}"
     now_iso = _utc_now()
     oldest_evicted = False
+    target_gid = str(guild_id or settings.main_guild_id or "1428666546942902294").strip()
+    role_code = "admin" if is_admin else ("dj" if has_dj_role else "member")
+    _set_user_guild_role(user_id, target_gid, role_code)
+    if guild_roles:
+        for gid_k, r_val in guild_roles.items():
+            _set_user_guild_role(user_id, gid_k, r_val)
 
     with db_manager.transaction() as conn:
-        # Migrasi sesi lama di discord_sessions ke discord_user_sessions jika belum ada
         legacy_row = conn.execute(
             "SELECT * FROM discord_sessions WHERE user_id = ?",
             (user_id,),
@@ -254,14 +368,13 @@ def _issue_single_discord_session(
                     legacy_row["username"],
                     legacy_row["discord_tag"],
                     legacy_row["role_label"],
-                    int(legacy_row["is_owner"]),
+                    0,
                     int(legacy_row["has_dj_role"]),
                     int(legacy_row["is_admin"]),
                     legacy_row["created_at"],
                 ),
             )
 
-        # Simpan sesi perangkat baru ke discord_user_sessions
         conn.execute(
             """
             INSERT INTO discord_user_sessions (
@@ -275,14 +388,13 @@ def _issue_single_discord_session(
                 username,
                 discord_tag,
                 role_label,
-                1 if is_owner else 0,
+                0,
                 1 if has_dj_role else 0,
                 1 if is_admin else 0,
                 now_iso,
             ),
         )
 
-        # Periksa total sesi aktif milik user_id ini; jika > 5, hapus sesi paling lama (FIFO)
         active_rows = conn.execute(
             """
             SELECT session_token FROM discord_user_sessions
@@ -301,7 +413,6 @@ def _issue_single_discord_session(
                     (old_row["session_token"],),
                 )
 
-        # Sinkronkan juga sesi terbaru ke tabel discord_sessions untuk kompatibilitas mundur
         conn.execute(
             """
             INSERT INTO discord_sessions (
@@ -313,7 +424,7 @@ def _issue_single_discord_session(
                 username = excluded.username,
                 discord_tag = excluded.discord_tag,
                 role_label = excluded.role_label,
-                is_owner = excluded.is_owner,
+                is_owner = 0,
                 has_dj_role = excluded.has_dj_role,
                 is_admin = excluded.is_admin,
                 created_at = excluded.created_at
@@ -324,7 +435,7 @@ def _issue_single_discord_session(
                 username,
                 discord_tag,
                 role_label,
-                1 if is_owner else 0,
+                0,
                 1 if has_dj_role else 0,
                 1 if is_admin else 0,
                 now_iso,
@@ -332,6 +443,8 @@ def _issue_single_discord_session(
         )
 
         active_count = min(len(active_rows), MAX_SESSIONS_PER_USER)
+
+    guild_roles_map = _get_user_guild_roles_map(user_id, default_main_role=role_code)
 
     return {
         "session_token": new_token,
@@ -342,15 +455,17 @@ def _issue_single_discord_session(
             "id": user_id,
             "name": username,
             "discordTag": discord_tag,
+            "role": role_code,
             "roleLabel": role_label,
-            "isOwner": is_owner,
+            "isOwner": False,
             "hasDjRole": has_dj_role,
             "isAdmin": is_admin,
+            "guildRoles": guild_roles_map,
         },
     }
 
 
-def _get_session_from_token(token: str) -> Optional[Dict[str, Any]]:
+def _get_session_from_token(token: str, guild_id: Optional[str] = None, live_bot: Any = None) -> Optional[Dict[str, Any]]:
     clean = (token or "").strip()
     if not clean:
         return None
@@ -367,16 +482,36 @@ def _get_session_from_token(token: str) -> Optional[Dict[str, Any]]:
             ).fetchone()
     if not row:
         return None
+
+    uid = str(row["user_id"])
+    base_is_adm = bool(row["is_admin"])
+    base_has_dj = bool(row["has_dj_role"]) or base_is_adm
+    default_main_role = "admin" if base_is_adm else ("dj" if base_has_dj else "member")
+    target_gid = str(guild_id or settings.main_guild_id or "1428666546942902294").strip()
+    effective_role = _resolve_role_for_guild(
+        user_id=uid,
+        guild_id=target_gid,
+        default_main_role=default_main_role,
+        live_bot=live_bot,
+    )
+    is_adm = effective_role == "admin"
+    has_dj = effective_role in ("admin", "dj")
+    role_label = "Admin Server" if is_adm else ("Role DJ" if has_dj else "Member")
+    guild_roles_map = _get_user_guild_roles_map(uid, default_main_role=default_main_role)
+    guild_roles_map[target_gid] = effective_role
+
     return {
         "session_token": row["session_token"],
         "user": {
-            "id": row["user_id"],
+            "id": uid,
             "name": row["username"],
             "discordTag": row["discord_tag"],
-            "roleLabel": row["role_label"],
-            "isOwner": bool(row["is_owner"]),
-            "hasDjRole": bool(row["has_dj_role"]),
-            "isAdmin": bool(row["is_admin"]),
+            "role": effective_role,
+            "roleLabel": role_label,
+            "isOwner": False,
+            "hasDjRole": has_dj,
+            "isAdmin": is_adm,
+            "guildRoles": guild_roles_map,
         },
     }
 
@@ -539,18 +674,36 @@ def create_fastapi_app():
 
         asyncio.create_task(_clock_loop())
 
-    def _extract_session(request: Request) -> Optional[Dict[str, Any]]:
+    def _extract_session(request: Request, guild_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        target_gid = (
+            guild_id
+            or request.path_params.get("guild_id")
+            or request.query_params.get("guild_id")
+            or request.headers.get("X-Guild-Id")
+            or settings.main_guild_id
+            or ""
+        ).strip()
         auth_header = request.headers.get("Authorization", "")
         bearer = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
         q_tok = request.query_params.get("session_token", "").strip()
         cookie_tok = request.cookies.get("athenaa_session_token", "").strip()
-        sess = _get_session_from_token(bearer or q_tok or cookie_tok)
+        explicit_tok = bearer or q_tok or cookie_tok
+        live_bot = getattr(app.state, "bot", None)
+        sess = _get_session_from_token(explicit_tok, guild_id=target_gid, live_bot=live_bot)
         role_override = request.headers.get("X-Actor-Role", "").strip().lower()
+
+        if sess and explicit_tok:
+            guild_roles_map = sess["user"].get("guildRoles") or {}
+            # Jika user sudah memiliki mapping role per-server, patuhi role pada server (target_gid) tersebut
+            if guild_roles_map and target_gid:
+                return sess
+
         if role_override in ("admin", "dj", "member"):
             base_user = sess["user"] if sess else {
                 "id": "844174494099701780" if role_override == "admin" else ("user-dj-02" if role_override == "dj" else "user-member-03"),
-                "name": "Admin Server" if role_override == "admin" else ("DJ Server" if role_override == "dj" else "Member Server"),
+                "name": "Admin Server" if role_override == "admin" else ("Role DJ" if role_override == "dj" else "Member"),
                 "discordTag": "@admin" if role_override == "admin" else ("@dj_nyolbar" if role_override == "dj" else "@member_kampus"),
+                "guildRoles": {target_gid: role_override} if target_gid else {},
             }
             is_adm = role_override == "admin"
             is_dj = role_override in ("admin", "dj")
@@ -559,10 +712,10 @@ def create_fastapi_app():
                 "user": {
                     **base_user,
                     "role": role_override,
-                    "roleLabel": "Admin Server" if is_adm else ("DJ Server" if is_dj else "Member Server"),
+                    "roleLabel": "Admin Server" if is_adm else ("Role DJ" if is_dj else "Member"),
                     "isAdmin": is_adm,
                     "hasDjRole": is_dj,
-                    "isOwner": is_adm,
+                    "isOwner": False,
                 },
             }
         return sess
@@ -605,9 +758,10 @@ def create_fastapi_app():
             raise HTTPException(status_code=429, detail="Terlalu banyak percobaan login. Coba lagi nanti.")
 
     @app.get("/api/auth/session")
-    async def api_auth_session(request: Request):
+    async def api_auth_session(request: Request, guild_id: str = Query("")):
         _check_auth_rate_limit(request)
-        sess = _extract_session(request)
+        target_gid = (guild_id or request.headers.get("X-Guild-Id") or settings.main_guild_id or "").strip()
+        sess = _extract_session(request, guild_id=target_gid)
         oauth_ready = bool(settings.discord_client_id and settings.discord_client_secret)
         if sess:
             return {
@@ -626,8 +780,22 @@ def create_fastapi_app():
                     "SELECT * FROM discord_sessions ORDER BY created_at DESC LIMIT 1"
                 ).fetchone()
         if row:
-            is_adm = bool(row["is_admin"]) or bool(row["is_owner"])
-            has_dj = bool(row["has_dj_role"]) or is_adm
+            live_bot = getattr(app.state, "bot", None)
+            base_is_adm = bool(row["is_admin"])
+            base_has_dj = bool(row["has_dj_role"]) or base_is_adm
+            default_main_role = "admin" if base_is_adm else ("dj" if base_has_dj else "member")
+            eff_role = _resolve_role_for_guild(
+                user_id=row["user_id"],
+                guild_id=target_gid,
+                default_main_role=default_main_role,
+                live_bot=live_bot,
+            )
+            is_adm = eff_role == "admin"
+            has_dj = eff_role in ("admin", "dj")
+            role_label = "Admin Server" if is_adm else ("Role DJ" if has_dj else "Member")
+            guild_roles_map = _get_user_guild_roles_map(row["user_id"], default_main_role=default_main_role)
+            if target_gid:
+                guild_roles_map[target_gid] = eff_role
             return {
                 "authenticated": True,
                 "session_token": row["session_token"],
@@ -635,11 +803,12 @@ def create_fastapi_app():
                     "id": row["user_id"],
                     "name": row["username"],
                     "discordTag": row["discord_tag"],
-                    "role": "admin" if is_adm else ("dj" if has_dj else "member"),
-                    "roleLabel": "Admin Server" if is_adm else ("DJ Server" if has_dj else "Member Server"),
-                    "isOwner": is_adm,
+                    "role": eff_role,
+                    "roleLabel": role_label,
+                    "isOwner": False,
                     "hasDjRole": has_dj,
                     "isAdmin": is_adm,
+                    "guildRoles": guild_roles_map,
                 },
                 "max_sessions": MAX_SESSIONS_PER_USER,
                 "oauth_configured": oauth_ready,
@@ -659,21 +828,23 @@ def create_fastapi_app():
             body = {}
         role_req = str(body.get("role") or "admin").strip().lower()
         if role_req not in ("admin", "dj", "member"):
-            role_req = "admin"
+            role_req = "member"
+        target_gid = str(body.get("guild_id") or request.headers.get("X-Guild-Id") or settings.main_guild_id or "").strip()
         uid = str(body.get("user_id") or ("844174494099701780" if role_req == "admin" else f"user-{role_req}-01"))
-        uname = str(body.get("username") or ("Admin Server" if role_req == "admin" else ("DJ Server" if role_req == "dj" else "Member Server")))
+        uname = str(body.get("username") or ("Admin Server" if role_req == "admin" else ("Role DJ" if role_req == "dj" else "Member")))
         utag = str(body.get("discord_tag") or f"@{uname.lower().replace(' ', '_')}")
         is_adm = role_req == "admin"
         has_dj = role_req in ("admin", "dj")
-        role_label = "Admin Server" if is_adm else ("DJ Server" if has_dj else "Member Server")
+        role_label = "Admin Server" if is_adm else ("Role DJ" if has_dj else "Member")
         issued = _issue_single_discord_session(
             user_id=uid,
             username=uname,
             discord_tag=utag,
             role_label=role_label,
-            is_owner=is_adm,
+            is_owner=False,
             has_dj_role=has_dj,
             is_admin=is_adm,
+            guild_id=target_gid,
         )
         return {
             "authenticated": True,
@@ -681,6 +852,7 @@ def create_fastapi_app():
             "user": {
                 **issued["user"],
                 "role": role_req,
+                "isOwner": False,
             },
         }
 
@@ -824,7 +996,8 @@ def create_fastapi_app():
 
             is_admin = False
             has_dj_role = False
-            role_label = "Member Server"
+            role_label = "Member"
+            guild_roles_record: Dict[str, str] = {}
 
             try:
                 guilds_req = urllib.request.Request(
@@ -835,14 +1008,14 @@ def create_fastapi_app():
                     guilds_data = json.loads(gresp.read().decode("utf-8"))
 
                 for guild in guilds_data:
-                    gid_str = str(guild.get("id", ""))
+                    gid_str = str(guild.get("id", "")).strip()
+                    if not gid_str:
+                        continue
                     perms_int = int(guild.get("permissions", "0") or "0")
-                    if bool(guild.get("owner")) or (perms_int & 0x8) or (perms_int & 0x20):
-                        if not settings.main_guild_id or gid_str == str(settings.main_guild_id):
-                            is_admin = True
-                            has_dj_role = True
-                            role_label = "Admin Server"
-                    if settings.main_guild_id and gid_str == str(settings.main_guild_id):
+                    guild_is_adm = bool(guild.get("owner")) or bool(perms_int & 0x8) or bool(perms_int & 0x20)
+                    guild_role = "admin" if guild_is_adm else "member"
+
+                    if not guild_is_adm and settings.main_guild_id and gid_str == str(settings.main_guild_id):
                         try:
                             member_req = urllib.request.Request(
                                 f"https://discord.com/api/users/@me/guilds/{settings.main_guild_id}/member",
@@ -852,11 +1025,21 @@ def create_fastapi_app():
                                 member_data = json.loads(mresp.read().decode("utf-8"))
                             user_roles = member_data.get("roles", [])
                             if settings.dj_role_id and settings.dj_role_id in user_roles:
-                                has_dj_role = True
-                                if not is_admin:
-                                    role_label = "DJ Server"
+                                guild_role = "dj"
                         except Exception:
                             pass
+
+                    guild_roles_record[gid_str] = guild_role
+                    _set_user_guild_role(uid, gid_str, guild_role)
+
+                    if not settings.main_guild_id or gid_str == str(settings.main_guild_id):
+                        if guild_role == "admin":
+                            is_admin = True
+                            has_dj_role = True
+                            role_label = "Admin Server"
+                        elif guild_role == "dj":
+                            has_dj_role = True
+                            role_label = "Role DJ"
             except Exception:
                 pass
 
@@ -865,9 +1048,11 @@ def create_fastapi_app():
                 username=uname,
                 discord_tag=utag,
                 role_label=role_label,
-                is_owner=is_admin,
+                is_owner=False,
                 has_dj_role=has_dj_role,
                 is_admin=is_admin,
+                guild_id=settings.main_guild_id,
+                guild_roles=guild_roles_record,
             )
 
             token_str = issued["session_token"]
@@ -1630,6 +1815,21 @@ def create_fastapi_app():
             media_type=mime_type,
         )
 
+    @app.delete("/api/guilds/{guild_id}/modules/{attachment_id}")
+    async def api_delete_guild_module(guild_id: str, attachment_id: str):
+        validate_snowflake_param("guild_id", guild_id)
+        deleted = academy_service.delete_attachment(guild_id, attachment_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Modul atau lampiran tidak ditemukan.")
+        return {"ok": True, "deleted_id": attachment_id, "attachment": deleted}
+
+    @app.delete("/api/modules/{attachment_id}")
+    async def api_delete_module_direct(attachment_id: str):
+        deleted = academy_service.delete_attachment("", attachment_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Modul atau lampiran tidak ditemukan.")
+        return {"ok": True, "deleted_id": attachment_id, "attachment": deleted}
+
     @app.get("/api/guilds/{guild_id}/rpg")
     async def api_guild_rpg(guild_id: str):
         validate_snowflake_param("guild_id", guild_id)
@@ -1710,17 +1910,26 @@ def create_fastapi_app():
         return {"ok": True}
 
     # =========================================================================
-    # Admin Server & Python Codebase Endpoints (Accessible by Server Admin)
+    # Admin Server Endpoints (Per-Server Scoped; Codebase & ZIP Download Hidden)
     # =========================================================================
     def _require_admin(request: Request) -> None:
-        sess = _extract_session(request)
-        is_adm = bool(sess and (sess.get("user", {}).get("isAdmin") or sess.get("user", {}).get("isOwner")))
+        target_gid = (
+            request.path_params.get("guild_id")
+            or request.query_params.get("guild_id")
+            or request.headers.get("X-Guild-Id")
+            or settings.main_guild_id
+            or ""
+        ).strip()
+        sess = _extract_session(request, guild_id=target_gid)
+        is_adm = bool(sess and sess.get("user", {}).get("isAdmin"))
         if not is_adm and request.query_params.get("role", "").lower() == "admin":
-            is_adm = True
+            # Hanya izinkan query param fallback jika user tidak sedang dibatasi pada server non-admin
+            if not (sess and sess.get("user", {}).get("guildRoles") and target_gid):
+                is_adm = True
         if not is_adm:
             raise HTTPException(
                 status_code=403,
-                detail="Akses Ditolak: Fitur ini dikhususkan untuk Admin Server.",
+                detail="Akses Ditolak: Fitur ini dikhususkan untuk Admin Server pada server ini.",
             )
 
     @app.get("/api/admin/metrics")
@@ -1748,31 +1957,17 @@ def create_fastapi_app():
         return run_test_suite()
 
     @app.get("/api/python-codebase")
-    async def api_python_codebase(request: Request, file: str = Query("app/main.py")):
-        _require_admin(request)
-        safe_path = (BASE_DIR / file).resolve()
-        if not str(safe_path).startswith(str(BASE_DIR.resolve())) or not safe_path.exists():
-            safe_path = BASE_DIR / "app" / "main.py"
-        rel_selected = str(safe_path.relative_to(BASE_DIR))
-        selected_role = next(
-            (f["role"] for f in PYTHON_CODEBASE_FILES if f["path"] == rel_selected),
-            "Source Code Bot Python",
+    async def api_python_codebase(request: Request):
+        return JSONResponse(
+            status_code=403,
+            content={"error": "Kode sumber bot disembunyikan dan dinonaktifkan untuk semua role."},
         )
-        return {
-            "files": PYTHON_CODEBASE_FILES,
-            "selected_file": rel_selected,
-            "selected_role": selected_role,
-            "content": safe_path.read_text(encoding="utf-8"),
-        }
 
     @app.get("/api/python-codebase/download-zip")
     async def api_download_zip(request: Request):
-        _require_admin(request)
-        zip_path = Path(create_source_zip())
-        return FileResponse(
-            path=str(zip_path),
-            media_type="application/zip",
-            filename="athenaa-discord-bot.zip",
+        return JSONResponse(
+            status_code=403,
+            content={"error": "Unduhan file .zip kode bot dinonaktifkan."},
         )
 
     # =========================================================================
@@ -1783,18 +1978,19 @@ def create_fastapi_app():
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        candidate = (STATIC_DIR / full_path).resolve()
+        active_static_dir = _resolve_static_dir()
+        candidate = (active_static_dir / full_path).resolve()
         if (
             full_path
-            and str(candidate).startswith(str(STATIC_DIR.resolve()))
+            and str(candidate).startswith(str(active_static_dir.resolve()))
             and candidate.is_file()
         ):
             return FileResponse(str(candidate))
-        index_html = STATIC_DIR / "index.html"
+        index_html = active_static_dir / "index.html"
         if index_html.exists():
             raw_html = index_html.read_text(encoding="utf-8", errors="ignore")
             return HTMLResponse(raw_html)
-        return JSONResponse({"status": "Athenaa API Running", "web_ui": "Jalankan npm run build untuk menyertakan static UI"})
+        return JSONResponse({"status": "Athenaa API Running", "web_ui": "Static UI siap dimuat"})
 
     _ACTIVE_BROADCAST_CBS.append(_broadcast_guild_state)
     return app

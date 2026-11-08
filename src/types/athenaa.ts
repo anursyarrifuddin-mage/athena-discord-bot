@@ -149,5 +149,7 @@ export interface ActiveActorProfile {
   hasDjRole?: boolean;
   isAdmin: boolean;
   isOwner: boolean;
+  guildRoles?: Record<string, ServerRoleType>;
 }
+
 

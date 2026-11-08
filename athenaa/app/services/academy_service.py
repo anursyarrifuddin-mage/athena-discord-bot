@@ -16,6 +16,7 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -618,6 +619,46 @@ class AcademyService:
             else:
                 cur = conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
             return cur.rowcount > 0
+
+    def delete_attachment(self, guild_id: str, attachment_id: str) -> Optional[Dict[str, object]]:
+        """Menghapus modul/lampiran dari tabel task_attachments beserta file fisiknya di direktori modules."""
+        att_id = (attachment_id or "").strip()
+        gid = (guild_id or "").strip()
+        if not att_id:
+            return None
+
+        with self.db.transaction() as conn:
+            if gid:
+                row = conn.execute(
+                    "SELECT * FROM task_attachments WHERE attachment_id = ? AND guild_id = ?",
+                    (att_id, gid),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM task_attachments WHERE attachment_id = ?",
+                    (att_id,),
+                ).fetchone()
+
+            if not row:
+                return None
+
+            row_data = dict(row)
+            conn.execute("DELETE FROM task_attachments WHERE attachment_id = ?", (att_id,))
+
+        stored_name = str(row_data.get("stored_filename") or "").strip()
+        if stored_name and "/" not in stored_name and "\\" not in stored_name:
+            candidate_dirs = [Path("modules"), Path("data/modules")]
+            if getattr(settings, "modules_dir", None):
+                candidate_dirs.insert(0, Path(settings.modules_dir))
+            for d in candidate_dirs:
+                try:
+                    fp = d / stored_name
+                    if fp.is_file():
+                        fp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        return row_data
 
     @staticmethod
     def get_moodle_env_status() -> Dict[str, object]:

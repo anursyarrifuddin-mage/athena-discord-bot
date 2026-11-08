@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "node server.ts",
-    "build": "vite build && node -e \"const fs=require('fs');fs.rmSync('athenaa/app/web/static/assets',{recursive:true,force:true});fs.cpSync('dist','athenaa/app/web/static',{recursive:true});\"",
+    "build": "node -e \"const fs=require('fs'),cp=require('child_process');if(!fs.existsSync('node_modules/vite')){console.log('Installing dependencies...');cp.execSync('npm install',{stdio:'inherit'});}\" && npx vite build && node -e \"const fs=require('fs');fs.mkdirSync('athenaa/app/web/static',{recursive:true});fs.rmSync('athenaa/app/web/static/assets',{recursive:true,force:true});fs.cpSync('dist','athenaa/app/web/static',{recursive:true});\"",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
