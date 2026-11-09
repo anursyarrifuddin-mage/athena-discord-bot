@@ -26,7 +26,11 @@ music:
   
   # yt-dlp streaming
   ytdlp_timeout_sec: 14             # Subprocess timeout for stream extraction
+<<<<<<< HEAD
   ytdlp_format: "bestaudio[protocol^=m3u8]/best[protocol^=m3u8]/bestaudio[acodec=opus][abr<=160]/bestaudio[ext=webm][abr<=160]/bestaudio[ext=m4a][abr<=160]/bestaudio/best"
+=======
+  ytdlp_format: "bestaudio[acodec=opus][abr<=160]/bestaudio[ext=webm][abr<=160]/bestaudio[ext=m4a][abr<=160]/bestaudio/best"
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
   stream_cache_ttl_sec: 1800        # Stream URL cache TTL (30 minutes)
   stream_cache_max_size: 300        # Max cached stream URLs
 

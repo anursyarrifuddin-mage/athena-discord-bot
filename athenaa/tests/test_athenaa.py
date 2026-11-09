@@ -895,6 +895,7 @@ END:VCALENDAR"""
         self.assertEqual(deleted["original_filename"], "Modul_Jarkom_Bab1.pdf")
         self.assertIsNone(self.academy_svc.delete_attachment(guild_id, "att-testdel01"))
 
+<<<<<<< HEAD
     def test_security_hardening_strict_voice_follow_and_oauth_state(self) -> None:
         import asyncio
         from types import SimpleNamespace
@@ -948,6 +949,8 @@ END:VCALENDAR"""
         )
         self.assertIsNone(vc_for_user_b)
 
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 
 if __name__ == "__main__":
     unittest.main()
@@ -957,4 +960,7 @@ if __name__ == "__main__":
 
 
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006

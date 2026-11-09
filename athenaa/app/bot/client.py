@@ -155,11 +155,15 @@ except ImportError:
 from app.config import settings
 from app.database import db_manager
 from app.models.schema import QueueItemModel
+<<<<<<< HEAD
 from app.security.validators import (
     check_host_lock_permission,
     sanitize_and_validate_attachment,
     sanitize_discord_outbound_text,
 )
+=======
+from app.security.validators import check_host_lock_permission, sanitize_and_validate_attachment
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 from app.services.academy_service import AcademyService
 from app.services.backup_service import BackupService
 from app.services.leveling_service import LevelingService
@@ -168,7 +172,10 @@ from app.services.music_service import (
     DEFAULT_STREAM_USER_AGENT,
     TrackCandidate,
     classify_music_input,
+<<<<<<< HEAD
     download_playable_audio_file_ytdlp,
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     extract_playable_stream_ytdlp,
     extract_spotify_playlist_tracks,
     get_verified_radios,
@@ -486,6 +493,7 @@ def build_daily_task_reminder_embed(
     return emb
 
 
+<<<<<<< HEAD
 def _ensure_opus_loaded() -> bool:
     """
     Memastikan library native libopus termuat oleh discord.opus di Linux/Pterodactyl
@@ -542,6 +550,13 @@ def _needs_stream_extraction(url: Optional[str]) -> bool:
         return True
     if cleaned.startswith("/") and Path(cleaned).is_file():
         return False
+=======
+def _needs_stream_extraction(url: Optional[str]) -> bool:
+    """Memeriksa apakah URL belum berupa direct audio stream dan masih perlu diekstrak."""
+    if not url or not isinstance(url, str):
+        return True
+    cleaned = url.strip()
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     if not cleaned.startswith(("http://", "https://")):
         return True
     lowered = cleaned.lower()
@@ -589,7 +604,10 @@ def _fetch_youtube_alt_stream_fallback(title: str, artist: str) -> Optional[Dict
                         "stream_url": str(info["stream_url"]),
                         "duration_sec": int(info.get("duration_sec") or cand.duration_sec or 0),
                         "thumbnail_url": str(info.get("thumbnail_url") or cand.thumbnail_url or ""),
+<<<<<<< HEAD
                         "cookies": str(info.get("cookies") or ""),
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                     }
     except Exception as exc:
         logger.debug("Fallback YouTube stream gagal untuk '%s': %s", query, exc)
@@ -999,22 +1017,41 @@ def build_discord_bot(
                 logger.error("Gagal menyinkronkan event queue (%s) ke VoiceClient: %s", event_type, exc_cb)
 
         async def setup_hook(self) -> None:
+<<<<<<< HEAD
             _ensure_opus_loaded()
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
             queue_service.register_listener(self._on_queue_event)
 
             try:
                 synced_global = await self.tree.sync()
                 logger.info("Berhasil menyinkronkan %d global slash commands ke Discord.", len(synced_global))
+<<<<<<< HEAD
+=======
+                if settings.main_guild_id and settings.main_guild_id.isdigit():
+                    guild_obj = discord.Object(id=int(settings.main_guild_id))
+                    self.tree.clear_commands(guild=guild_obj)
+                    await self.tree.sync(guild=guild_obj)
+                    logger.info(
+                        "Berhasil membersihkan duplikasi guild-scoped slash commands pada Guild %s.",
+                        settings.main_guild_id,
+                    )
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
             except Exception as exc:
                 logger.warning("Gagal menyinkronkan slash commands: %s", exc)
 
         def _sync_discord_guild(self, g: Any) -> str:
+<<<<<<< HEAD
             """Mendaftarkan/memperbarui server Discord ke SQLite & state memori secara modular per-server."""
+=======
+            """Mendaftarkan/memperbarui server Discord ke SQLite & state memori serta menginisialisasi voice channel."""
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
             gid = str(g.id)
             gname = str(getattr(g, "name", "") or f"Server {gid}")
             queue_service.register_active_guild(gid, gname)
             academy_service.ensure_guild_exists(gid, gname)
             st = queue_service.get_state(gid)
+<<<<<<< HEAD
             vc = getattr(g, "voice_client", None)
             if vc and getattr(vc, "is_connected", lambda: False)() and getattr(vc, "channel", None):
                 st.voice_channel_id = str(vc.channel.id)
@@ -1048,6 +1085,33 @@ def build_discord_bot(
                 except Exception:
                     pass
                 await self._notify_web(gid)
+=======
+            voice_channels = getattr(g, "voice_channels", []) or []
+            for vc in voice_channels:
+                if any(not getattr(m, "bot", False) for m in getattr(vc, "members", [])):
+                    st.voice_channel_id = str(vc.id)
+                    st.voice_channel_name = vc.name
+                    break
+            if (not st.voice_channel_id or not str(st.voice_channel_id).isdigit()) and voice_channels:
+                st.voice_channel_id = str(voice_channels[0].id)
+                st.voice_channel_name = voice_channels[0].name
+            return gid
+
+        async def on_ready(self) -> None:
+            logger.info("Athenaa Discord Bot aktif sebagai %s (ID: %s)", self.user, getattr(self.user, "id", ""))
+            for g in self.guilds:
+                gid = self._sync_discord_guild(g)
+
+                if gid != str(settings.main_guild_id or ""):
+                    try:
+                        g_obj = discord.Object(id=g.id)
+                        self.tree.clear_commands(guild=g_obj)
+                        await self.tree.sync(guild=g_obj)
+                    except Exception:
+                        pass
+
+            await self._notify_web(str(settings.main_guild_id))
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 
             if self._position_task is None or self._position_task.done():
                 self._position_task = asyncio.create_task(self._playback_ticker_loop())
@@ -1080,13 +1144,22 @@ def build_discord_bot(
             queue_service.unregister_active_guild(gid)
             academy_service.remove_guild(gid)
             logger.info("Athenaa keluar dari server Discord: %s (ID: %s)", getattr(guild, "name", gid), gid)
+<<<<<<< HEAD
             queue_service.notify_listeners(gid, "guild_remove")
             await self._notify_web(gid)
+=======
+            queue_service.notify_listeners(str(settings.main_guild_id), "guild_remove")
+            await self._notify_web(str(settings.main_guild_id))
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 
         async def _playback_ticker_loop(self) -> None:
             """
             Mengupdate posisi detik lagu yang sedang diputar di Discord Voice agar sinkron 100% dengan Web UI,
+<<<<<<< HEAD
             tanpa pernah melakukan force-restart lagu yang sudah selesai diputar atau masuk ke channel user lain.
+=======
+            tanpa pernah melakukan force-restart lagu yang sudah selesai diputar.
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
             """
             vc_disconnect_mono: Dict[str, float] = {}
 
@@ -1152,11 +1225,20 @@ def build_discord_bot(
                         elif not vc.is_playing() and not vc.is_paused() and st.current_track and st.is_playing and not st.is_paused:
                             active_tid = self._active_vc_track_id.get(gid)
                             if active_tid and active_tid == st.current_track.item_id:
+<<<<<<< HEAD
+=======
+                                # Lagu baru saja selesai diputar di FFmpeg; biarkan callback _after_track memajukan lagu.
+                                # Jika dalam 3.5 detik _after_track belum memajukan lagu, panggil _handle_track_finished sebagai fallback aman.
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                                 stopped_since = self._track_stopped_mono.setdefault(gid, now_ts)
                                 if now_ts - stopped_since >= 3.5:
                                     self._track_stopped_mono.pop(gid, None)
                                     asyncio.create_task(self._handle_track_finished(gid))
                             else:
+<<<<<<< HEAD
+=======
+                                # Lagu aktif di state belum pernah mulai diputar di VoiceClient
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                                 self._track_stopped_mono.pop(gid, None)
                                 if now_ts - self._last_sync_attempt.get(gid, 0.0) >= 3.5:
                                     self._last_sync_attempt[gid] = now_ts
@@ -1167,6 +1249,27 @@ def build_discord_bot(
                                             seek_seconds=0,
                                         )
                                     )
+<<<<<<< HEAD
+=======
+                    else:
+                        if vc is not None and (now_ts - vc_disconnect_mono.get(gid, now_ts)) < 15.0:
+                            continue
+
+                        if st.current_track and st.is_playing and not st.is_paused:
+                            has_humans_in_vc = any(
+                                any(not m.bot for m in ch.members) for ch in g.voice_channels
+                            )
+                            if not self._is_unplayed_seed_track(gid, st) and has_humans_in_vc:
+                                if now_ts - self._last_sync_attempt.get(gid, 0.0) >= 8.0:
+                                    self._last_sync_attempt[gid] = now_ts
+                                    asyncio.create_task(
+                                        self.start_or_sync_voice_playback(
+                                            gid,
+                                            st.current_track.requester_id,
+                                            seek_seconds=0,
+                                        )
+                                    )
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 
         async def _voice_exp_loop(self) -> None:
             while not self.is_closed():
@@ -1205,6 +1308,10 @@ def build_discord_bot(
                             )
 
         def _get_guild_task_channel_id(self, guild_id: str) -> str:
+<<<<<<< HEAD
+=======
+            is_main = str(guild_id or "").strip() == str(settings.main_guild_id or "1428666546942902294").strip()
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
             try:
                 with academy_service.db.transaction() as conn:
                     row = conn.execute(
@@ -1215,9 +1322,16 @@ def build_discord_bot(
                     return str(row["task_channel_id"]).strip()
             except Exception:
                 pass
+<<<<<<< HEAD
             return str(settings.task_reminder_channel_id or "").strip()
 
         def _get_guild_dj_role_id(self, guild_id: str) -> str:
+=======
+            return str(settings.task_reminder_channel_id or "").strip() if is_main else ""
+
+        def _get_guild_dj_role_id(self, guild_id: str) -> str:
+            is_main = str(guild_id or "").strip() == str(settings.main_guild_id or "1428666546942902294").strip()
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
             try:
                 with academy_service.db.transaction() as conn:
                     row = conn.execute(
@@ -1228,16 +1342,27 @@ def build_discord_bot(
                     return str(row["dj_role_id"]).strip()
             except Exception:
                 pass
+<<<<<<< HEAD
             return str(settings.dj_role_id or "role-dj").strip()
+=======
+            return str(settings.dj_role_id or "").strip() if is_main else "role-dj"
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 
         async def _resolve_discord_text_channel(self, guild: Any, channel_id_str: str) -> Optional[Any]:
             if not channel_id_str or not channel_id_str.isdigit():
                 return None
             cid = int(channel_id_str)
+<<<<<<< HEAD
             ch = (guild.get_channel(cid) if guild else None) or self.get_channel(cid)
             if ch is None and guild is not None:
                 try:
                     ch = await guild.fetch_channel(cid)
+=======
+            ch = self.get_channel(cid) or (guild.get_channel(cid) if guild else None)
+            if ch is None:
+                try:
+                    ch = await self.fetch_channel(cid)
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                 except Exception:
                     ch = None
             return ch
@@ -1247,9 +1372,18 @@ def build_discord_bot(
             while not self.is_closed():
                 try:
                     guild_ids = {str(g.id) for g in self.guilds}
+<<<<<<< HEAD
                     for gid in guild_ids:
                         saved_ical = academy_service.get_guild_saved_ical_url(gid)
                         has_env_moodle = bool(
+=======
+                    if settings.main_guild_id:
+                        guild_ids.add(str(settings.main_guild_id))
+                    for gid in guild_ids:
+                        is_main_srv = str(gid).strip() == str(settings.main_guild_id or "1428666546942902294").strip()
+                        saved_ical = academy_service.get_guild_saved_ical_url(gid)
+                        has_env_moodle = is_main_srv and bool(
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                             settings.moodle_ical_url
                             or (settings.moodle_username and settings.moodle_password)
                         )
@@ -1283,7 +1417,11 @@ def build_discord_bot(
         async def _daily_0001_wib_reminder_loop(self) -> None:
             """
             Mengirim pengingat tugas akademik & Waskita beserta file lampiran modulnya ke channel Discord:
+<<<<<<< HEAD
             1. Setiap hari tepat pukul 00:01 AM WIB (Asia/Jakarta, UTC+7) untuk seluruh tugas aktif di tiap server.
+=======
+            1. Setiap hari tepat pukul 00:01 AM WIB (Asia/Jakarta, UTC+7) untuk seluruh tugas aktif.
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
             2. Pengingat H-3 Hari, H-6 Jam, dan H-1 Jam sebelum tenggat waktu.
             """
             wib_tz = ZoneInfo("Asia/Jakarta")
@@ -1300,9 +1438,17 @@ def build_discord_bot(
                         if not ch_id or not ch_id.isdigit():
                             continue
 
+<<<<<<< HEAD
                         if now_wib.hour == 0 and now_wib.minute >= 1:
                             saved_ical = academy_service.get_guild_saved_ical_url(gid)
                             if saved_ical or settings.moodle_ical_url or (settings.moodle_username and settings.moodle_password):
+=======
+                        # 1. Evaluasi Jadwal Pengingat Harian Pukul 00:01 WIB
+                        if now_wib.hour == 0 and now_wib.minute >= 1:
+                            is_main_srv = str(gid).strip() == str(settings.main_guild_id or "1428666546942902294").strip()
+                            saved_ical = academy_service.get_guild_saved_ical_url(gid)
+                            if saved_ical or (is_main_srv and (settings.moodle_ical_url or (settings.moodle_username and settings.moodle_password))):
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                                 try:
                                     await asyncio.to_thread(
                                         academy_service.sync_moodle_ics_content,
@@ -1353,6 +1499,10 @@ def build_discord_bot(
                                         gid,
                                     )
 
+<<<<<<< HEAD
+=======
+                        # 2. Evaluasi Pengingat Bertahap (H-3d, H-6h, H-1h)
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                         due_list = academy_service.evaluate_due_reminders(gid, now=now_utc)
                         if due_list:
                             channel = await self._resolve_discord_text_channel(g, ch_id)
@@ -1388,6 +1538,7 @@ def build_discord_bot(
                     logger.debug("Loop pengingat harian selesai dengan catatan: %s", exc)
                 await asyncio.sleep(20.0)
 
+<<<<<<< HEAD
         async def _ensure_bot_unmuted_in_vc(self, guild: Any, vc: Any) -> None:
             """Memastikan bot tidak dalam kondisi self_mute atau server mute saat berada di Voice Channel."""
             try:
@@ -1411,6 +1562,8 @@ def build_discord_bot(
             except Exception:
                 pass
 
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
         async def ensure_voice_connected(
             self,
             guild_id: str,
@@ -1426,6 +1579,7 @@ def build_discord_bot(
                 st = queue_service.get_state(guild_id)
                 vc: Optional[discord.VoiceClient] = guild.voice_client  # type: ignore
 
+<<<<<<< HEAD
                 # Cari Voice Channel tempat user yang me-request (requester_user_id) berada saat ini
                 requester_vc: Optional[Any] = None
                 req_uid_str = str(requester_user_id or "").strip()
@@ -1483,15 +1637,39 @@ def build_discord_bot(
                             st.voice_channel_id = str(vc_check.channel.id)
                             st.voice_channel_name = vc_check.channel.name
                             await self._ensure_bot_unmuted_in_vc(guild, vc_check)
+=======
+                # 1. JIKA BOT SUDAH CONNECT DI VOICE:
+                # Jangan pernah pindah channel sendiri (kecuali dipindah manual oleh user di Discord)!
+                if vc is not None:
+                    if vc.is_connected():
+                        if vc.channel:
+                            st.voice_channel_id = str(vc.channel.id)
+                            st.voice_channel_name = vc.channel.name
+                        return vc
+
+                    # Tunggu hingga 5 detik jika discord.py sedang auto-reconnect internal (code 1006)
+                    for _ in range(20):
+                        await asyncio.sleep(0.25)
+                        vc_check: Optional[discord.VoiceClient] = guild.voice_client  # type: ignore
+                        if vc_check and vc_check.is_connected():
+                            if vc_check.channel:
+                                st.voice_channel_id = str(vc_check.channel.id)
+                                st.voice_channel_name = vc_check.channel.name
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                             return vc_check
 
                     try:
                         await vc.disconnect(force=True)
+<<<<<<< HEAD
                         await asyncio.sleep(0.5)
+=======
+                        await asyncio.sleep(0.6)
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                     except Exception:
                         pass
 
                 # 2. JIKA BOT BELUM CONNECT DI VOICE:
+<<<<<<< HEAD
                 # WAJIB mengikuti Voice Channel dari user yang login / me-request (requester_user_id)!
                 # JANGAN PERNAH masuk ke Voice Channel milik user lain secara sembarangan!
                 target_channel: Optional[Any] = requester_vc
@@ -1505,6 +1683,43 @@ def build_discord_bot(
                 if not target_channel:
                     logger.info(
                         "Batal join voice di Guild %s: User (%s) belum bergabung ke Voice Channel mana pun.",
+=======
+                target_channel: Optional[discord.VoiceChannel] = None
+
+                if requester_user_id and str(requester_user_id).isdigit():
+                    member = guild.get_member(int(requester_user_id))
+                    if not member:
+                        try:
+                            member = await guild.fetch_member(int(requester_user_id))
+                        except Exception:
+                            member = None
+                    if member and member.voice and isinstance(member.voice.channel, discord.VoiceChannel):
+                        target_channel = member.voice.channel
+
+                # Fallback 1: gunakan preferred_channel_id jika ada member manusia di dalamnya atau mode 24/7 / web control
+                if not target_channel and preferred_channel_id and str(preferred_channel_id).isdigit():
+                    ch = guild.get_channel(int(preferred_channel_id))
+                    if isinstance(ch, discord.VoiceChannel):
+                        if st.mode_247 or any(not getattr(m, "bot", False) for m in ch.members) or not str(requester_user_id or "").isdigit():
+                            target_channel = ch
+
+                # Fallback 2: cari voice channel mana pun di guild yang sedang berisi member manusia
+                if not target_channel:
+                    for ch in getattr(guild, "voice_channels", []) or []:
+                        if any(not getattr(m, "bot", False) for m in getattr(ch, "members", [])):
+                            target_channel = ch
+                            break
+
+                # Fallback 3: jika mode 24/7 aktif, masuk ke voice channel pertama yang tersedia di guild
+                if not target_channel and st.mode_247:
+                    vcs = getattr(guild, "voice_channels", []) or []
+                    if vcs:
+                        target_channel = vcs[0]
+
+                if not target_channel:
+                    logger.info(
+                        "Batal join voice di Guild %s: Tidak ditemukan Voice Channel aktif untuk requester (%s).",
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                         guild.name,
                         requester_user_id,
                     )
@@ -1514,6 +1729,7 @@ def build_discord_bot(
                 st.voice_channel_name = target_channel.name
 
                 try:
+<<<<<<< HEAD
                     vc = await target_channel.connect(timeout=15.0, reconnect=True, self_deaf=True, self_mute=False)
                     await self._ensure_bot_unmuted_in_vc(guild, vc)
                     logger.info(
@@ -1521,13 +1737,23 @@ def build_discord_bot(
                         target_channel.name,
                         target_channel.id,
                         requester_user_id,
+=======
+                    vc = await target_channel.connect(timeout=15.0, reconnect=True, self_deaf=True)
+                    logger.info(
+                        "Berhasil bergabung ke Voice Channel '%s' (ID: %s) di server %s.",
+                        target_channel.name,
+                        target_channel.id,
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                         guild.name,
                     )
                     return vc
                 except discord.ClientException:
                     vc_now: Optional[discord.VoiceClient] = guild.voice_client  # type: ignore
                     if vc_now and vc_now.is_connected():
+<<<<<<< HEAD
                         await self._ensure_bot_unmuted_in_vc(guild, vc_now)
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                         return vc_now
                     return None
                 except Exception as exc:
@@ -1551,8 +1777,11 @@ def build_discord_bot(
             if not track or (not st.is_playing and not st.is_paused):
                 return False
 
+<<<<<<< HEAD
             _ensure_opus_loaded()
 
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
             target_item_id = track.item_id
             sync_key = f"{target_item_id}:{int(seek_seconds)}"
 
@@ -1572,7 +1801,11 @@ def build_discord_bot(
                 ):
                     if vc_existing.source and hasattr(vc_existing.source, "volume"):
                         try:
+<<<<<<< HEAD
                             vc_existing.source.volume = max(0.05, min(2.0, st.volume / 100.0))
+=======
+                            vc_existing.source.volume = max(0.01, min(2.0, st.volume / 100.0))
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                             self._active_vc_volume[guild_id] = st.volume
                         except Exception:
                             pass
@@ -1593,6 +1826,7 @@ def build_discord_bot(
             await self._notify_web(guild_id)
 
             try:
+<<<<<<< HEAD
                 use_local_file_fallback = bool(getattr(track, "_use_local_file_fallback", False))
 
                 if force_restart and seek_seconds == 0 and track.source_type != "radio":
@@ -1611,6 +1845,14 @@ def build_discord_bot(
                         stream_url = str(dl_info["local_path"])
                         track.stream_url = stream_url
 
+=======
+                if force_restart and seek_seconds == 0 and track.source_type != "radio":
+                    if track.source_url:
+                        invalidate_stream_cache(track.source_url)
+                    track.stream_url = ""
+
+                stream_url = track.stream_url if not _needs_stream_extraction(track.stream_url) else ""
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                 if not stream_url:
                     target_query = _build_track_stream_query(track)
                     info = await asyncio.to_thread(extract_playable_stream_ytdlp, target_query)
@@ -1619,9 +1861,12 @@ def build_discord_bot(
                         track.stream_url = stream_url
                         if info.get("user_agent"):
                             self._track_user_agents[track.item_id] = str(info["user_agent"])
+<<<<<<< HEAD
                         # Store cookies for HLS streams (needed for segment requests)
                         if info.get("cookies"):
                             track._stream_cookies = str(info["cookies"])
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                         if info.get("duration_sec") and int(info["duration_sec"]) > 0:
                             track.duration_sec = int(info["duration_sec"])
                         if info.get("thumbnail_url") and not track.thumbnail_url:
@@ -1638,6 +1883,7 @@ def build_discord_bot(
                             track.duration_sec = int(yt_alt["duration_sec"])
                         if yt_alt.get("thumbnail_url") and not track.thumbnail_url:
                             track.thumbnail_url = str(yt_alt["thumbnail_url"])
+<<<<<<< HEAD
                         if yt_alt.get("cookies"):
                             track._stream_cookies = str(yt_alt["cookies"])
 
@@ -1647,6 +1893,8 @@ def build_discord_bot(
                     if dl_info and dl_info.get("local_path"):
                         stream_url = str(dl_info["local_path"])
                         track.stream_url = stream_url
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 
                 if (
                     self._playback_gen.get(guild_id) != my_gen
@@ -1675,14 +1923,18 @@ def build_discord_bot(
                     if not vc:
                         return False
 
+<<<<<<< HEAD
                     # Ensure bot is not muted (self_mute or server mute) before playing
                     await self._ensure_bot_unmuted_in_vc(guild_obj, vc)
 
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                     ffmpeg_bin = shutil.which("ffmpeg")
                     if not ffmpeg_bin:
                         logger.error("Binary ffmpeg tidak ditemukan di PATH kontainer!")
                         return False
 
+<<<<<<< HEAD
                     is_local_file = stream_url.startswith("/") and Path(stream_url).is_file()
                     if is_local_file:
                         before_opts = "-nostdin"
@@ -1736,6 +1988,20 @@ def build_discord_bot(
                             getattr(vstate, "deaf", None),
                             getattr(vstate.channel, "name", "None") if getattr(vstate, "channel", None) else "None"
                         )
+=======
+                    ua_val = (
+                        self._track_user_agents.get(track.item_id)
+                        or DEFAULT_STREAM_USER_AGENT
+                    ).replace('"', "")
+                    before_opts = (
+                        f'-user_agent "{ua_val}" '
+                        "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin"
+                    )
+                    if seek_seconds > 0 and track.source_type != "radio":
+                        before_opts = f"-ss {int(seek_seconds)} {before_opts}"
+
+                    vol_float = max(0.01, min(2.0, st.volume / 100.0))
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 
                     if vc.is_playing() or vc.is_paused():
                         vc.stop()
@@ -1750,16 +2016,26 @@ def build_discord_bot(
                         if self._playback_gen.get(guild_id) != my_gen:
                             return
                         elapsed_play = time.monotonic() - play_start_mono
+<<<<<<< HEAD
                         # Jika stream HTTP terputus mendadak (<3.0 detik sejak mulai),
                         # otomatis unduh file audio lokal via yt-dlp agar pemutaran dijamin mengeluarkan suara!
                         if (
                             elapsed_play < 3.0
+=======
+                        # Jika stream putus mendadak (<2.5 detik sejak mulai) dan bukan karena seek di ujung lagu,
+                        # re-extract stream URL segar sekali lagi agar lagu tidak ter-skip sia-sia.
+                        if (
+                            elapsed_play < 2.5
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                             and seek_seconds == 0
                             and track.source_type != "radio"
                             and not getattr(track, "_retried_fresh_stream", False)
                         ):
                             setattr(track, "_retried_fresh_stream", True)
+<<<<<<< HEAD
                             setattr(track, "_use_local_file_fallback", True)
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                             if track.source_url:
                                 invalidate_stream_cache(track.source_url)
                             track.stream_url = ""
@@ -1779,6 +2055,7 @@ def build_discord_bot(
                                 self._handle_track_finished(guild_id, my_gen), self.loop
                             )
 
+<<<<<<< HEAD
                     opus_ready = _ensure_opus_loaded()
                     played_ok = False
                     # Debug: Log stream URL type and ffmpeg command being constructed
@@ -1811,6 +2088,18 @@ def build_discord_bot(
 
                     if not played_ok:
                         af_chain = f"volume={vol_float:.2f}"
+=======
+                    try:
+                        pcm_audio = discord.FFmpegPCMAudio(
+                            stream_url,
+                            executable=ffmpeg_bin,
+                            before_options=before_opts,
+                            options="-vn -af aresample=async=1:first_pts=0",
+                        )
+                        audio_source: Any = discord.PCMVolumeTransformer(pcm_audio, volume=vol_float)
+                    except Exception:
+                        af_chain = f"volume={vol_float:.2f},aresample=async=1:first_pts=0"
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                         audio_source = discord.FFmpegOpusAudio(
                             stream_url,
                             bitrate=128,
@@ -1818,6 +2107,7 @@ def build_discord_bot(
                             before_options=before_opts,
                             options=f'-vn -filter:a "{af_chain}"',
                         )
+<<<<<<< HEAD
                         vc.play(audio_source, after=_after_track)
                         # Verify fallback playback
                         await asyncio.sleep(0.5)
@@ -1826,6 +2116,10 @@ def build_discord_bot(
                         else:
                             logger.error("Fallback playback FAILED: vc.is_playing()=False for guild %s", guild_id)
 
+=======
+
+                    vc.play(audio_source, after=_after_track)
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                     if st.is_paused:
                         vc.pause()
 
@@ -1840,12 +2134,19 @@ def build_discord_bot(
                     await self._notify_web(guild_id)
                     self._schedule_prefetch(guild_id)
                     logger.info(
+<<<<<<< HEAD
                         "Memutar audio '%s — %s' di Voice Channel '%s' (vol=%d%%, mode=%s).",
+=======
+                        "Memutar audio '%s — %s' di Voice Channel '%s' (vol=%d%%).",
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                         track.title,
                         track.artist,
                         st.voice_channel_name,
                         st.volume,
+<<<<<<< HEAD
                         "local-file" if is_local_file else ("pcm-opus" if opus_ready else "ffmpeg-opus"),
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                     )
                     return True
             except Exception as exc:
@@ -2569,7 +2870,11 @@ def build_discord_bot(
     # =========================================================================
     # Music & Voice Slash Commands (Modern Rich Embeds)
     # =========================================================================
+<<<<<<< HEAD
     @bot.tree.command(name="play", description="Putar lagu/playlist dari judul/penyanyi, URL YouTube, Spotify Track/Playlist, atau Radio")
+=======
+    @bot.tree.command(name="play", description="Putar lagu atau playlist langsung dari judul/penyanyi, URL YouTube, Spotify Track/Playlist, atau Radio")
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     @app_commands.describe(query="Ketik judul lagu & penyanyi (pilih dari dropdown) atau tempel URL YouTube/Spotify (Track/Playlist/Album)")
     async def cmd_play(interaction: discord.Interaction, query: str) -> None:
         guild_id = str(interaction.guild_id or settings.main_guild_id)

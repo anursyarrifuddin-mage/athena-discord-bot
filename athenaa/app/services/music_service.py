@@ -2285,6 +2285,7 @@ DEFAULT_STREAM_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
+<<<<<<< HEAD
 # Prefer HLS streams (m3u8) which are more stable than direct googlevideo.com URLs
 # HLS manifests have longer-lived signatures and support adaptive bitrate
 # YouTube HLS is typically video+audio combined (not audio-only), so match both protocol patterns
@@ -2292,15 +2293,21 @@ DEFAULT_STREAM_USER_AGENT = (
 DISCORD_OPTIMAL_YTDLP_FORMAT = (
     "bestaudio[protocol^=m3u8]/"
     "best[protocol^=m3u8]/"
+=======
+DISCORD_OPTIMAL_YTDLP_FORMAT = (
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     "bestaudio[acodec=opus][abr<=160]/"
     "bestaudio[ext=webm][abr<=160]/"
     "bestaudio[ext=m4a][abr<=160]/"
     "bestaudio/best"
 )
 
+<<<<<<< HEAD
 # Consistent extractor args for all yt-dlp calls - tv_embedded provides stable HLS
 YTDLP_EXTRACTOR_ARGS = "youtube:player_client=tv_embedded;skip=translated_subs"
 
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 
 def extract_with_ytdlp(query_or_url: str) -> Optional[TrackCandidate]:
     import sys
@@ -2324,7 +2331,11 @@ def extract_with_ytdlp(query_or_url: str) -> Optional[TrackCandidate]:
         "--retries",
         "2",
         "--extractor-args",
+<<<<<<< HEAD
         YTDLP_EXTRACTOR_ARGS,
+=======
+        "youtube:skip=hls,translated_subs",
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
         "-f",
         DISCORD_OPTIMAL_YTDLP_FORMAT,
         target,
@@ -2351,9 +2362,12 @@ def extract_with_ytdlp(query_or_url: str) -> Optional[TrackCandidate]:
         clean_title, clean_artist = _clean_youtube_title_and_artist(raw_title, raw_artist)
         c_vid = str(chosen.get("id") or "")
         src_url = f"https://www.youtube.com/watch?v={c_vid}" if c_vid else (chosen.get("webpage_url") or query_or_url)
+<<<<<<< HEAD
         headers = chosen.get("http_headers") if isinstance(chosen.get("http_headers"), dict) else {}
         user_agent = str(headers.get("User-Agent") or DEFAULT_STREAM_USER_AGENT)
         cookies = headers.get("Cookie") or headers.get("cookie") or ""
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
         _register_track_meta(clean_title, clean_artist, int(chosen.get("duration") or 0), src_url, video_id=c_vid)
         return TrackCandidate(
             title=clean_title,
@@ -2386,8 +2400,11 @@ def extract_playable_stream_ytdlp(query_or_url: str) -> Optional[Dict[str, objec
     1. Subprocess yt-dlp pada target tunggal (selesai < 1.5 detik).
     2. Fallback in-process yt_dlp jika subprocess gagal, sehingga TIDAK PERNAH mengembalikan None
        yang memicu Fallback Radio Prambors di client.py!
+<<<<<<< HEAD
     3. Prefer HLS streams (m3u8) over direct googlevideo.com URLs for stability.
        If only direct URLs are available, download to local file instead.
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     """
     import sys
 
@@ -2408,8 +2425,11 @@ def extract_playable_stream_ytdlp(query_or_url: str) -> Optional[Dict[str, objec
     ytdlp_bin = shutil.which("yt-dlp")
     cmd_prefix = [ytdlp_bin] if ytdlp_bin else [sys.executable, "-m", "yt_dlp"]
 
+<<<<<<< HEAD
     # Don't skip HLS - HLS manifests (m3u8) provide more stable streaming URLs
     # than direct googlevideo.com signed URLs which expire quickly (403 errors)
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     cmd = [
         *cmd_prefix,
         "--force-ipv4",
@@ -2423,7 +2443,11 @@ def extract_playable_stream_ytdlp(query_or_url: str) -> Optional[Dict[str, objec
         "--retries",
         "2",
         "--extractor-args",
+<<<<<<< HEAD
         YTDLP_EXTRACTOR_ARGS,
+=======
+        "youtube:skip=hls,translated_subs",
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
         "-f",
         DISCORD_OPTIMAL_YTDLP_FORMAT,
         target,
@@ -2450,8 +2474,11 @@ def extract_playable_stream_ytdlp(query_or_url: str) -> Optional[Dict[str, objec
                 c_vid = str(cand.get("id") or "")
                 headers = cand.get("http_headers") if isinstance(cand.get("http_headers"), dict) else {}
                 user_agent = str(headers.get("User-Agent") or DEFAULT_STREAM_USER_AGENT)
+<<<<<<< HEAD
                 # Extract cookies for HLS streams (required for googlevideo.com segment requests)
                 cookies = headers.get("Cookie") or headers.get("cookie") or ""
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                 webpage_url = f"https://www.youtube.com/watch?v={c_vid}" if c_vid else str(cand.get("webpage_url") or target)
                 _register_track_meta(clean_title, clean_artist, dur_sec, webpage_url, video_id=c_vid)
                 result: Dict[str, object] = {
@@ -2462,7 +2489,10 @@ def extract_playable_stream_ytdlp(query_or_url: str) -> Optional[Dict[str, objec
                     "source_url": webpage_url,
                     "thumbnail_url": str(cand.get("thumbnail") or ""),
                     "user_agent": user_agent,
+<<<<<<< HEAD
                     "cookies": cookies,
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                     "acodec": str(cand.get("acodec") or ""),
                 }
                 _STREAM_EXTRACT_CACHE.set(cleaned_in, (now_mono, result))
@@ -2486,12 +2516,16 @@ def extract_playable_stream_ytdlp(query_or_url: str) -> Optional[Dict[str, objec
             "retries": 2,
             "nocheckcertificate": True,
             "geo_bypass": True,
+<<<<<<< HEAD
             "extractor_args": {
                 "youtube": {
                     "player_client": ["tv_embedded"],
                     "skip": ["translated_subs"],
                 }
             },
+=======
+            "extractor_args": {"youtube": {"skip": ["hls", "translated_subs"]}},
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(target, download=False)
@@ -2506,8 +2540,11 @@ def extract_playable_stream_ytdlp(query_or_url: str) -> Optional[Dict[str, objec
                 c_vid = str(cand.get("id") or "")
                 headers = cand.get("http_headers") if isinstance(cand.get("http_headers"), dict) else {}
                 user_agent = str(headers.get("User-Agent") or DEFAULT_STREAM_USER_AGENT)
+<<<<<<< HEAD
                 # Extract cookies for HLS streams
                 cookies = headers.get("Cookie") or headers.get("cookie") or ""
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                 webpage_url = f"https://www.youtube.com/watch?v={c_vid}" if c_vid else str(cand.get("webpage_url") or target)
                 result = {
                     "stream_url": str(cand["url"]),
@@ -2517,7 +2554,10 @@ def extract_playable_stream_ytdlp(query_or_url: str) -> Optional[Dict[str, objec
                     "source_url": webpage_url,
                     "thumbnail_url": str(cand.get("thumbnail") or ""),
                     "user_agent": user_agent,
+<<<<<<< HEAD
                     "cookies": cookies,
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                     "acodec": str(cand.get("acodec") or ""),
                 }
                 _STREAM_EXTRACT_CACHE.set(cleaned_in, (now_mono, result))
@@ -2529,6 +2569,7 @@ def extract_playable_stream_ytdlp(query_or_url: str) -> Optional[Dict[str, objec
     return None
 
 
+<<<<<<< HEAD
 def download_playable_audio_file_ytdlp(query_or_url: str, guild_id: str = "default") -> Optional[Dict[str, object]]:
     """
     Mengunduh file audio ringan ke direktori sementara (/tmp/athenaa_audio) menggunakan yt-dlp
@@ -2607,6 +2648,8 @@ def download_playable_audio_file_ytdlp(query_or_url: str, guild_id: str = "defau
 
 
 
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 _PREVIEW_STREAM_CACHE = LRUCache(max_size=400, ttl_seconds=1800)
 
 
@@ -2674,8 +2717,11 @@ def resolve_browser_preview_stream(title: str, artist: str, source_url: str = ""
                 "stream_url": str(yt_res["stream_url"]),
                 "thumbnail_url": str(yt_res.get("thumbnail_url") or ""),
                 "source": "ytdlp_stream",
+<<<<<<< HEAD
                 "user_agent": str(yt_res.get("user_agent") or DEFAULT_STREAM_USER_AGENT),
                 "cookies": str(yt_res.get("cookies") or ""),
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
             }
             _PREVIEW_STREAM_CACHE.set(cache_key, out)
             return dict(out)

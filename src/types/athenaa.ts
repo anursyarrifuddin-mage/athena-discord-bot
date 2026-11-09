@@ -143,8 +143,11 @@ export type ServerRoleType = 'admin' | 'dj' | 'member';
 export interface ActiveActorProfile {
   id: string;
   name: string;
+<<<<<<< HEAD
   discordTag?: string;
   avatarUrl?: string;
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
   role?: ServerRoleType;
   roleLabel: string;
   roles: string[];
@@ -155,4 +158,7 @@ export interface ActiveActorProfile {
 }
 
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006

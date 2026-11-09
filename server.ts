@@ -394,12 +394,19 @@ function getSessionFromRequest(req: express.Request, explicitGuildId?: string) {
       req.headers['x-guild-id'] ||
       MAIN_GUILD_ID
   ).trim();
+<<<<<<< HEAD
+=======
+  const roleOverride = String(req.headers['x-actor-role'] || req.query.role || '')
+    .trim()
+    .toLowerCase();
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
   const authHeader = String(req.headers.authorization || '');
   const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
   const queryToken = String(req.query.session_token || '').trim();
   const cookieToken = parseCookieToken(String(req.headers.cookie || ''));
   const token = bearerToken || queryToken || cookieToken;
 
+<<<<<<< HEAD
   if (!token) {
     return null;
   }
@@ -432,6 +439,85 @@ function getSessionFromRequest(req: express.Request, explicitGuildId?: string) {
       guildRoles: resolved.guildRoles,
     },
   };
+=======
+  let baseSession: {
+    session_token: string;
+    user: {
+      id: string;
+      name: string;
+      discordTag: string;
+      role?: string;
+      roleLabel: string;
+      isOwner: boolean;
+      hasDjRole: boolean;
+      isAdmin: boolean;
+      guildRoles?: Record<string, 'admin' | 'dj' | 'member'>;
+    };
+  } | null = null;
+
+  if (token) {
+    const row = db
+      .prepare('SELECT * FROM discord_sessions WHERE session_token = ?')
+      .get(token) as Record<string, unknown> | undefined;
+    if (row) {
+      const uid = String(row.user_id);
+      const resolved = resolveUserRoleForGuild(
+        uid,
+        targetGid,
+        Boolean(row.is_admin),
+        Boolean(row.has_dj_role)
+      );
+      baseSession = {
+        session_token: String(row.session_token),
+        user: {
+          id: uid,
+          name: String(row.username),
+          discordTag: String(row.discord_tag),
+          role: resolved.role,
+          roleLabel: resolved.roleLabel,
+          isOwner: false,
+          hasDjRole: resolved.hasDjRole,
+          isAdmin: resolved.isAdmin,
+          guildRoles: resolved.guildRoles,
+        },
+      };
+    }
+  }
+
+  if (baseSession && token) {
+    const gMap = baseSession.user.guildRoles || {};
+    if (Object.keys(gMap).length > 0 && targetGid) {
+      return baseSession;
+    }
+  }
+
+  if (roleOverride === 'admin' || roleOverride === 'dj' || roleOverride === 'member') {
+    const isAdm = roleOverride === 'admin';
+    const hasDj = roleOverride === 'admin' || roleOverride === 'dj';
+    return {
+      session_token: baseSession?.session_token || `role_${roleOverride}`,
+      user: {
+        id:
+          baseSession?.user.id ||
+          (isAdm ? DEFAULT_ADMIN_ID : roleOverride === 'dj' ? 'user-dj-02' : 'user-member-03'),
+        name:
+          baseSession?.user.name ||
+          (isAdm ? 'Aetheriaaa' : roleOverride === 'dj' ? 'DJ NyolBar' : 'Member Kampus'),
+        discordTag:
+          baseSession?.user.discordTag ||
+          (isAdm ? '@aetheriaaa' : roleOverride === 'dj' ? '@dj_nyolbar' : '@member_kampus'),
+        role: roleOverride,
+        roleLabel: isAdm ? 'Admin Server' : hasDj ? 'Role DJ' : 'Member',
+        isOwner: false,
+        hasDjRole: hasDj,
+        isAdmin: isAdm,
+        guildRoles: targetGid ? { [targetGid]: roleOverride } : {},
+      },
+    };
+  }
+
+  return baseSession;
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 }
 
 export interface TrackItem {
@@ -1592,8 +1678,47 @@ async function startServer() {
       return;
     }
 
+<<<<<<< HEAD
     res.json({
       authenticated: false,
+=======
+    const fallbackRow = db
+      .prepare('SELECT * FROM discord_sessions ORDER BY created_at DESC LIMIT 1')
+      .get() as Record<string, unknown> | undefined;
+
+    if (fallbackRow) {
+      const uid = String(fallbackRow.user_id);
+      const resolved = resolveUserRoleForGuild(
+        uid,
+        targetGid,
+        Boolean(fallbackRow.is_admin),
+        Boolean(fallbackRow.has_dj_role)
+      );
+      res.json({
+        authenticated: true,
+        session_token: String(fallbackRow.session_token),
+        user: {
+          id: uid,
+          name: String(fallbackRow.username),
+          discordTag: String(fallbackRow.discord_tag),
+          role: resolved.role,
+          roleLabel: resolved.roleLabel,
+          isOwner: false,
+          hasDjRole: resolved.hasDjRole,
+          isAdmin: resolved.isAdmin,
+          guildRoles: resolved.guildRoles,
+        },
+        oauth_configured: Boolean(process.env.DISCORD_CLIENT_ID),
+      });
+      return;
+    }
+
+    const issued = issueSingleDiscordSession({ ...REAL_OWNER_ACCOUNT, guild_id: MAIN_GUILD_ID });
+    res.json({
+      authenticated: true,
+      session_token: issued.session_token,
+      user: issued.user,
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
       oauth_configured: Boolean(process.env.DISCORD_CLIENT_ID),
     });
   });
@@ -1665,11 +1790,15 @@ async function startServer() {
   // Official Discord OAuth2 Popup Authorization URL Endpoint
   app.get('/api/auth/discord/url', (req, res) => {
     const clientId = (process.env.DISCORD_CLIENT_ID || '').trim();
+<<<<<<< HEAD
     const clientSecret = (process.env.DISCORD_CLIENT_SECRET || '').trim();
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     const baseUrl = (process.env.APP_URL || `${req.protocol}://${req.get('host')}`).replace(
       /\/$/,
       ''
     );
+<<<<<<< HEAD
     const rawRedirect = (process.env.DISCORD_REDIRECT_URI || '').trim();
     const redirectUri =
       rawRedirect &&
@@ -1690,6 +1819,16 @@ async function startServer() {
         redirect_uri: redirectUri,
         error:
           'DISCORD_CLIENT_ID & DISCORD_CLIENT_SECRET belum diisi dengan kredensial numerik Discord Developer Portal.',
+=======
+    const redirectUri = process.env.DISCORD_REDIRECT_URI || `${baseUrl}/auth/callback`;
+
+    if (!clientId) {
+      res.status(400).json({
+        oauth_configured: false,
+        redirect_uri: redirectUri,
+        error:
+          'DISCORD_CLIENT_ID belum diatur di .env. Pastikan DISCORD_CLIENT_ID & DISCORD_CLIENT_SECRET telah diisi.',
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
       });
       return;
     }
@@ -3278,6 +3417,7 @@ END:VCALENDAR`;
 
   app.delete('/api/guilds/:guildId/modules/:attachmentId', (req, res) => {
     const { guildId, attachmentId } = req.params;
+<<<<<<< HEAD
     const active = getSessionFromRequest(req, guildId);
     const roleHeader = String(req.headers['x-actor-role'] || '').toLowerCase();
     if ((active && !active.user.isAdmin) || roleHeader === 'member' || roleHeader === 'dj') {
@@ -3286,6 +3426,8 @@ END:VCALENDAR`;
       });
       return;
     }
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     const row = db
       .prepare('SELECT * FROM task_attachments WHERE attachment_id = ? AND guild_id = ?')
       .get(attachmentId, guildId) as Record<string, unknown> | undefined;
@@ -3310,6 +3452,7 @@ END:VCALENDAR`;
 
   app.delete('/api/modules/:attachmentId', (req, res) => {
     const { attachmentId } = req.params;
+<<<<<<< HEAD
     const active = getSessionFromRequest(req);
     const roleHeader = String(req.headers['x-actor-role'] || '').toLowerCase();
     if ((active && !active.user.isAdmin) || roleHeader === 'member' || roleHeader === 'dj') {
@@ -3318,6 +3461,8 @@ END:VCALENDAR`;
       });
       return;
     }
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     const row = db
       .prepare('SELECT * FROM task_attachments WHERE attachment_id = ?')
       .get(attachmentId) as Record<string, unknown> | undefined;

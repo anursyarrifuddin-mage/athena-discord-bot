@@ -334,6 +334,7 @@ def validate_snowflake_param(param_name: str, value: str) -> None:
             status_code=400,
             detail=f"Parameter {param_name} tidak valid: harus berupa Discord Snowflake ID (15-22 digit).",
         )
+<<<<<<< HEAD
 
 
 def generate_oauth_state(secret_key: str = "") -> str:
@@ -384,3 +385,5 @@ def sanitize_discord_outbound_text(text: str, max_length: int = 500) -> str:
     cleaned = SCAM_OR_ABUSE_PATTERNS.sub("[diblokir-keamanan]", cleaned)
     return cleaned.strip()[:max_length]
 
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006

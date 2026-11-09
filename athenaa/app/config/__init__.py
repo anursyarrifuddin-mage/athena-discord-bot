@@ -37,6 +37,7 @@ _load_dotenv_if_present(BASE_DIR / ".env")
 _load_dotenv_if_present(BASE_DIR.parent / ".env")
 
 
+<<<<<<< HEAD
 def _resolve_discord_client_id() -> str:
     raw_cid = os.getenv("DISCORD_CLIENT_ID", "").strip()
     if raw_cid.isdigit() and len(raw_cid) >= 15:
@@ -62,14 +63,21 @@ def _resolve_discord_client_secret() -> str:
     return raw_sec
 
 
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 @dataclass(frozen=True)
 class AppSettings:
     """Objek konfigurasi aplikasi yang divalidasi saat startup."""
 
     # Discord Bot & OAuth2
     discord_token: str = field(default_factory=lambda: os.getenv("DISCORD_TOKEN", "").strip())
+<<<<<<< HEAD
     discord_client_id: str = field(default_factory=_resolve_discord_client_id)
     discord_client_secret: str = field(default_factory=_resolve_discord_client_secret)
+=======
+    discord_client_id: str = field(default_factory=lambda: os.getenv("DISCORD_CLIENT_ID", "").strip())
+    discord_client_secret: str = field(default_factory=lambda: os.getenv("DISCORD_CLIENT_SECRET", "").strip())
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     discord_redirect_uri: str = field(
         default_factory=lambda: os.getenv(
             "DISCORD_REDIRECT_URI", "http://localhost:3000/auth/discord/callback"
@@ -136,10 +144,13 @@ class AppSettings:
         or "athenaa-default-backup-key-2026"
     )
 
+<<<<<<< HEAD
     @property
     def encryption_secret(self) -> str:
         return self.encryption_key or self.session_secret
 
+=======
+>>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     # Database & Direktori Penyimpanan
     database_url: str = field(
         default_factory=lambda: os.getenv(
