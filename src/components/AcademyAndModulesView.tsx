@@ -32,11 +32,8 @@ export interface MoodleEnvStatus {
 interface AcademyAndModulesViewProps {
   subTab: 'academy' | 'modules';
   guildId: string;
-<<<<<<< HEAD
   sessionToken?: string;
   isAdmin?: boolean;
-=======
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
   tasks: AcademicTask[];
   attachments: TaskAttachment[];
   reminders: ReminderDelivery[];
@@ -48,11 +45,8 @@ interface AcademyAndModulesViewProps {
 const AcademyAndModulesViewComponent: React.FC<AcademyAndModulesViewProps> = ({
   subTab,
   guildId,
-<<<<<<< HEAD
   sessionToken,
   isAdmin = false,
-=======
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
   tasks,
   attachments,
   reminders,
@@ -239,7 +233,6 @@ const AcademyAndModulesViewComponent: React.FC<AcademyAndModulesViewProps> = ({
   };
 
   const handleDeleteModule = async (attachmentId: string, filename: string) => {
-<<<<<<< HEAD
     if (!isAdmin) {
       onNotify('Akses Ditolak: Hanya Admin Server yang dapat menghapus lampiran modul.', true);
       return;
@@ -252,11 +245,6 @@ const AcademyAndModulesViewComponent: React.FC<AcademyAndModulesViewProps> = ({
           'X-Guild-Id': guildId,
           ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
         },
-=======
-    try {
-      const resp = await fetch(`/api/guilds/${guildId}/modules/${attachmentId}`, {
-        method: 'DELETE',
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
       });
       if (resp.ok) {
         onNotify(`Modul / lampiran "${filename}" berhasil dihapus.`);
@@ -480,11 +468,7 @@ const AcademyAndModulesViewComponent: React.FC<AcademyAndModulesViewProps> = ({
                 Daftar Modul & Lampiran Tersedia ({attachments.length})
               </h2>
               <p className="text-xs text-[#B3B3B3] mt-1">
-<<<<<<< HEAD
                 Anggota terautentikasi dapat mengunduh modul. Penghapusan lampiran modul dikhususkan untuk <strong className="text-white">Admin Server</strong>.
-=======
-                Hanya pengguna terautentikasi di server terkait yang dapat mengunduh atau menghapus file modul.
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
               </p>
             </div>
 
@@ -520,7 +504,6 @@ const AcademyAndModulesViewComponent: React.FC<AcademyAndModulesViewProps> = ({
                         <Download className="w-3.5 h-3.5 text-[#DC95FF]" />
                         Unduh
                       </a>
-<<<<<<< HEAD
                       {isAdmin && (
                         <button
                           type="button"
@@ -532,17 +515,6 @@ const AcademyAndModulesViewComponent: React.FC<AcademyAndModulesViewProps> = ({
                           Hapus
                         </button>
                       )}
-=======
-                      <button
-                        type="button"
-                        aria-label={`Hapus modul ${att.original_filename}`}
-                        onClick={() => handleDeleteModule(att.attachment_id, att.original_filename)}
-                        className="px-3.5 py-1.5 rounded-full bg-[#282828] hover:bg-rose-900/60 text-xs font-semibold text-[#B3B3B3] hover:text-rose-200 flex items-center justify-center gap-1.5 transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                        Hapus
-                      </button>
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                     </div>
                   </div>
                 ))}
@@ -829,7 +801,6 @@ const AcademyAndModulesViewComponent: React.FC<AcademyAndModulesViewProps> = ({
                                 >
                                   {att.original_filename}
                                 </a>
-<<<<<<< HEAD
                                 {isAdmin && (
                                   <button
                                     type="button"
@@ -841,17 +812,6 @@ const AcademyAndModulesViewComponent: React.FC<AcademyAndModulesViewProps> = ({
                                     <Trash2 className="w-3 h-3 text-rose-400" />
                                   </button>
                                 )}
-=======
-                                <button
-                                  type="button"
-                                  aria-label={`Hapus lampiran ${att.original_filename}`}
-                                  onClick={() => handleDeleteModule(att.attachment_id, att.original_filename)}
-                                  className="ml-0.5 p-0.5 rounded hover:bg-rose-500/20 text-[#B3B3B3] hover:text-rose-300 transition-colors"
-                                  title={`Hapus lampiran ${att.original_filename}`}
-                                >
-                                  <Trash2 className="w-3 h-3 text-rose-400" />
-                                </button>
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                               </div>
                             ))}
                         </div>

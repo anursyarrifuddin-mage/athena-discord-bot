@@ -47,10 +47,7 @@ import { SpotifyBottomPlayer } from './components/SpotifyBottomPlayer';
 import { MusicAndLyricsView } from './components/MusicAndLyricsView';
 import { AcademyAndModulesView, MoodleEnvStatus } from './components/AcademyAndModulesView';
 import { RpgAndSettingsView } from './components/RpgAndSettingsView';
-<<<<<<< HEAD
-=======
 import { audioEngine } from './utils/audioSynth';
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 
 type NavTab =
   | 'overview'
@@ -66,11 +63,8 @@ type NavTab =
 const DEFAULT_ADMIN_PROFILE: ActiveActorProfile = {
   id: '844174494099701780',
   name: 'Aetheriaaa',
-<<<<<<< HEAD
   discordTag: '@aetheriaaa',
   avatarUrl: '',
-=======
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
   role: 'admin',
   roleLabel: 'Admin Server',
   roles: ['role-admin', 'role-dj'],
@@ -113,7 +107,6 @@ export default function App() {
       window.localStorage.setItem('athenaa_session_token', urlTok);
       return urlTok;
     }
-<<<<<<< HEAD
     return window.localStorage.getItem('athenaa_session_token') || '';
   });
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
@@ -124,10 +117,6 @@ export default function App() {
     return Boolean(window.localStorage.getItem('athenaa_session_token'));
   });
   const [authChecking, setAuthChecking] = useState<boolean>(true);
-=======
-    return window.localStorage.getItem('athenaa_session_token') || 'default-admin-session';
-  });
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
   const [showLoginModal, setShowLoginModal] = useState(false);
 
   const [musicState, setMusicState] = useState<GuildMusicState>(DEFAULT_MUSIC_STATE);
@@ -138,10 +127,7 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState<LevelProfile[]>([]);
   const [afkList, setAfkList] = useState<AfkEntry[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
-<<<<<<< HEAD
-=======
   const [browserAudioMuted, setBrowserAudioMuted] = useState(false);
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
   const [bannerNotice, setBannerNotice] = useState<{ text: string; isError: boolean } | null>(null);
 
   const showNotice = useCallback((text: string, isError = false) => {
@@ -157,11 +143,8 @@ export default function App() {
       user: {
         id: string;
         name: string;
-<<<<<<< HEAD
         discordTag?: string;
         avatarUrl?: string;
-=======
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
         role?: 'admin' | 'dj' | 'member';
         roleLabel: string;
         isOwner?: boolean;
@@ -172,14 +155,10 @@ export default function App() {
       forGuildId?: string
     ) => {
       window.localStorage.setItem('athenaa_session_token', token);
-<<<<<<< HEAD
       window.localStorage.setItem('athenaa_oauth_user', JSON.stringify(user));
       setSessionToken(token);
       setIsAuthenticated(true);
       setAuthChecking(false);
-=======
-      setSessionToken(token);
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
       setActiveActor((prev) => {
         const targetGid = forGuildId || selectedGuildId;
         const mergedGuildRoles: Record<string, ServerRoleType> = {
@@ -201,11 +180,8 @@ export default function App() {
         return {
           id: user.id,
           name: user.name,
-<<<<<<< HEAD
           discordTag: user.discordTag || `@${user.name.toLowerCase().replace(/\s+/g, '')}`,
           avatarUrl: user.avatarUrl || '',
-=======
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
           role: resolvedRole,
           roleLabel: isAdm ? 'Admin Server' : hasDj ? 'Role DJ' : 'Member',
           roles: isAdm ? ['role-admin', 'role-dj'] : hasDj ? ['role-dj'] : [],
@@ -220,13 +196,8 @@ export default function App() {
     [selectedGuildId]
   );
 
-<<<<<<< HEAD
-  const handlePreviewDiscordLogin = useCallback(
-    async (role: 'admin' | 'dj' | 'member' = 'admin') => {
-=======
   const handleSwitchRole = useCallback(
     async (role: 'admin' | 'dj' | 'member') => {
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
       try {
         const resp = await fetch('/api/auth/login', {
           method: 'POST',
@@ -241,21 +212,11 @@ export default function App() {
           const data = await resp.json();
           if (data.session_token && data.user) {
             applyAuthenticatedUser(data.session_token, data.user, selectedGuildId);
-            showNotice(
-<<<<<<< HEAD
-              `Login Discord berhasil sebagai ${data.user.name} (${data.user.discordTag || '@discord'}) — Peran Tertinggi: ${data.user.roleLabel}`
-=======
-              `Peran aktif pada server ini diubah ke: ${data.user.roleLabel} (${data.user.name})`
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
-            );
+            showNotice(`Peran aktif pada server ini diubah ke: ${data.user.roleLabel} (${data.user.name})`);
             return;
           }
         }
       } catch {
-<<<<<<< HEAD
-        // Ignore network error
-      }
-=======
         // Fallback local switch if offline
       }
       const fallbackUser =
@@ -290,39 +251,65 @@ export default function App() {
             };
       applyAuthenticatedUser(`local-${role}-session`, fallbackUser, selectedGuildId);
       showNotice(`Peran aktif pada server ini diubah ke: ${fallbackUser.roleLabel}`);
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     },
     [applyAuthenticatedUser, selectedGuildId, showNotice]
   );
 
-<<<<<<< HEAD
+  const handlePreviewDiscordLogin = useCallback(
+    async (role: 'admin' | 'dj' | 'member' = 'admin') => {
+      const fallbackUser =
+        role === 'admin'
+          ? {
+              id: '844174494099701780',
+              name: 'Aetheriaaa',
+              discordTag: '@aetheriaaa',
+              role: 'admin' as const,
+              roleLabel: 'Admin Server',
+              isAdmin: true,
+              hasDjRole: true,
+              guildRoles: { [selectedGuildId]: 'admin' as const },
+            }
+          : role === 'dj'
+          ? {
+              id: '532574896605757452',
+              name: 'Nacht',
+              discordTag: '@nacht',
+              role: 'dj' as const,
+              roleLabel: 'Role DJ',
+              isAdmin: false,
+              hasDjRole: true,
+              guildRoles: { [selectedGuildId]: 'dj' as const },
+            }
+          : {
+              id: '698812445519002112',
+              name: 'Kazuha',
+              discordTag: '@kazuha',
+              role: 'member' as const,
+              roleLabel: 'Member',
+              isAdmin: false,
+              hasDjRole: false,
+              guildRoles: { [selectedGuildId]: 'member' as const },
+            };
+      applyAuthenticatedUser(`local-${role}-session`, fallbackUser, selectedGuildId);
+      showNotice(`Preview login as ${fallbackUser.name} (${fallbackUser.roleLabel})`);
+    },
+    [applyAuthenticatedUser, selectedGuildId, showNotice]
+  );
+
   // Validate Discord session per selected server (strictly requires valid session token)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlTok = params.get('session_token');
     const isAutostart = params.get('autostart') === '1';
-=======
-  // Validate or bootstrap Discord session per selected server (strictly scoped per guild_id)
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const urlTok = params.get('session_token');
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     if (urlTok) {
       window.localStorage.setItem('athenaa_session_token', urlTok);
       window.history.replaceState({}, '', window.location.pathname);
     }
 
-<<<<<<< HEAD
     // Optimistic per-server highest-role resolution when switching servers
     setActiveActor((prev) => {
       const map = prev.guildRoles || {};
       const roleForGuild: ServerRoleType = map[selectedGuildId] || prev.role || 'member';
-=======
-    // Optimistic per-server role enforcement when switching servers
-    setActiveActor((prev) => {
-      const map = prev.guildRoles || {};
-      const roleForGuild: ServerRoleType = map[selectedGuildId] || 'member';
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
       const isAdm = roleForGuild === 'admin';
       const hasDj = roleForGuild === 'admin' || roleForGuild === 'dj';
       if (!isAdm) {
@@ -340,7 +327,6 @@ export default function App() {
     });
 
     const storedToken = urlTok || window.localStorage.getItem('athenaa_session_token') || '';
-<<<<<<< HEAD
     if (!storedToken && !isAutostart) {
       setIsAuthenticated(false);
       setAuthChecking(false);
@@ -354,11 +340,6 @@ export default function App() {
 
     const queryParts = new URLSearchParams();
     if (storedToken) queryParts.set('session_token', storedToken);
-=======
-    const queryParts = new URLSearchParams();
-    if (storedToken) queryParts.set('session_token', storedToken);
-    else queryParts.set('auto_bootstrap', '1');
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     if (selectedGuildId) queryParts.set('guild_id', selectedGuildId);
 
     fetch(`/api/auth/session?${queryParts.toString()}`, {
@@ -374,7 +355,6 @@ export default function App() {
           if (data.authenticated && data.session_token && data.user) {
             applyAuthenticatedUser(data.session_token, data.user, selectedGuildId);
             if (urlTok) {
-<<<<<<< HEAD
               showNotice(
                 `Otorisasi Discord OAuth2 berhasil: ${data.user.name} (${data.user.discordTag || ''}) — ${data.user.roleLabel}`
               );
@@ -384,36 +364,23 @@ export default function App() {
             window.localStorage.removeItem('athenaa_oauth_user');
             setSessionToken('');
             setIsAuthenticated(false);
-=======
-              showNotice(`Otorisasi Discord OAuth2 berhasil: ${data.user.name} (${data.user.roleLabel}).`);
-            }
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
           }
         }
       })
       .catch(() => {
         // Ignore transient offline error
-<<<<<<< HEAD
       })
       .finally(() => {
         setAuthChecking(false);
       });
   }, [selectedGuildId, applyAuthenticatedUser, handlePreviewDiscordLogin, showNotice]);
-=======
-      });
-  }, [selectedGuildId, applyAuthenticatedUser, showNotice]);
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 
   // Listen for official Discord OAuth2 completion via postMessage, BroadcastChannel, storage, and polling
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       if (event.data?.type === 'OAUTH_AUTH_SUCCESS' && event.data.session_token && event.data.user) {
         applyAuthenticatedUser(event.data.session_token, event.data.user);
-<<<<<<< HEAD
         showNotice(`Otorisasi Discord OAuth2 berhasil: ${event.data.user.name} (${event.data.user.roleLabel}).`);
-=======
-        showNotice(`Otorisasi Discord OAuth2 berhasil: ${event.data.user.name} (1 Sesi Aktif).`);
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
       }
     };
     window.addEventListener('message', handleMessage);
@@ -425,11 +392,7 @@ export default function App() {
         bc.onmessage = (ev) => {
           if (ev.data?.type === 'OAUTH_AUTH_SUCCESS' && ev.data.session_token && ev.data.user) {
             applyAuthenticatedUser(ev.data.session_token, ev.data.user);
-<<<<<<< HEAD
             showNotice(`Otorisasi Discord OAuth2 berhasil: ${ev.data.user.name} (${ev.data.user.roleLabel}).`);
-=======
-            showNotice(`Otorisasi Discord OAuth2 berhasil: ${ev.data.user.name} (1 Sesi Aktif).`);
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
           }
         };
       }
@@ -449,21 +412,14 @@ export default function App() {
               const data = await r.json();
               if (data.authenticated && data.session_token && data.user) {
                 applyAuthenticatedUser(data.session_token, data.user);
-<<<<<<< HEAD
                 showNotice(`Otorisasi Discord OAuth2 berhasil: ${data.user.name} (${data.user.roleLabel}).`);
-=======
-                showNotice(`Otorisasi Discord OAuth2 berhasil: ${data.user.name} (1 Sesi Aktif).`);
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
               }
             }
           })
           .catch(() => {});
-<<<<<<< HEAD
       } else if (ev.key === 'athenaa_session_token' && !ev.newValue) {
         setSessionToken('');
         setIsAuthenticated(false);
-=======
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
       }
     };
     window.addEventListener('storage', handleStorage);
@@ -475,7 +431,6 @@ export default function App() {
     };
   }, [applyAuthenticatedUser, showNotice]);
 
-<<<<<<< HEAD
   // While unauthenticated or Login Modal is open, poll localStorage token if popup sets it
   useEffect(() => {
     if (isAuthenticated && !showLoginModal) return;
@@ -486,30 +441,12 @@ export default function App() {
         const resp = await fetch(`/api/auth/session?session_token=${encodeURIComponent(tok)}`, {
           credentials: 'include',
           headers: { Authorization: `Bearer ${tok}` },
-=======
-  // While Login Modal is open, poll session/cookie/localStorage every 1.5s so popup completion never gets stuck
-  useEffect(() => {
-    if (!showLoginModal) return;
-    const timer = window.setInterval(async () => {
-      const tok = window.localStorage.getItem('athenaa_session_token') || '';
-      const checkUrl = tok
-        ? `/api/auth/session?session_token=${encodeURIComponent(tok)}`
-        : '/api/auth/session';
-      try {
-        const resp = await fetch(checkUrl, {
-          credentials: 'include',
-          headers: tok ? { Authorization: `Bearer ${tok}` } : {},
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
         });
         if (resp.ok) {
           const data = await resp.json();
           if (data.authenticated && data.session_token && data.user) {
             applyAuthenticatedUser(data.session_token, data.user);
-<<<<<<< HEAD
             showNotice(`Otorisasi Discord OAuth2 berhasil: ${data.user.name} (${data.user.roleLabel}).`);
-=======
-            showNotice(`Otorisasi Discord OAuth2 berhasil: ${data.user.name} (1 Sesi Aktif).`);
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
           }
         }
       } catch {
@@ -517,26 +454,15 @@ export default function App() {
       }
     }, 1500);
     return () => window.clearInterval(timer);
-<<<<<<< HEAD
   }, [isAuthenticated, showLoginModal, applyAuthenticatedUser, showNotice]);
-=======
-  }, [showLoginModal, applyAuthenticatedUser, showNotice]);
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
 
   const handleDiscordOAuthAuthorize = async (usePopup: boolean) => {
     try {
       const resp = await fetch('/api/auth/discord/url');
       const data = await resp.json();
       if (!resp.ok || !data.url) {
-<<<<<<< HEAD
         // When DISCORD_CLIENT_ID is not set in local preview environment, allow one-click Discord Session Login
         await handlePreviewDiscordLogin('admin');
-=======
-        showNotice(
-          data.error || 'DISCORD_CLIENT_ID belum dikonfigurasi pada environment server.',
-          true
-        );
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
         return;
       }
       if (usePopup) {
@@ -553,7 +479,6 @@ export default function App() {
   };
 
   const handleDiscordLogout = async () => {
-<<<<<<< HEAD
     const tokenToRevoke = sessionToken || window.localStorage.getItem('athenaa_session_token') || '';
     window.localStorage.removeItem('athenaa_session_token');
     window.localStorage.removeItem('athenaa_oauth_user');
@@ -565,14 +490,6 @@ export default function App() {
       credentials: 'include',
       headers: tokenToRevoke ? { Authorization: `Bearer ${tokenToRevoke}` } : {},
     }).catch(() => {});
-=======
-    await fetch('/api/auth/logout', {
-      method: 'POST',
-      credentials: 'include',
-      headers: sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {},
-    }).catch(() => {});
-    setShowLoginModal(true);
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
   };
 
   const fetchGuilds = useCallback(async () => {
@@ -638,71 +555,6 @@ export default function App() {
   }, [selectedGuildId, fetchMusicState, fetchTasks, fetchRpg]);
 
   useEffect(() => {
-    let ws: WebSocket | null = null;
-    let reconnectTimer: number | null = null;
-    let unmounted = false;
-
-    const connectWs = () => {
-      if (unmounted) return;
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(`${proto}//${window.location.host}/ws`);
-
-      ws.onopen = () => {
-        if (!unmounted) setWsConnected(true);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (Array.isArray(msg.guilds) && msg.guilds.length > 0) {
-            setGuilds(msg.guilds);
-          }
-          if (msg.type === 'POSITION_TICK' && msg.guild_id === selectedGuildId) {
-            setMusicState((prev) => {
-              if (prev.position_sec === msg.position_sec) return prev;
-              return { ...prev, position_sec: msg.position_sec };
-            });
-          }
-          if (msg.type === 'MUSIC_STATE_UPDATE' && msg.guild_id === selectedGuildId) {
-            setMusicState((prev) => ({
-              ...prev,
-              ...msg.state,
-              radios: prev.radios,
-            }));
-          }
-        } catch {
-          // Ignore malformed WS message
-        }
-      };
-
-      ws.onclose = () => {
-        if (!unmounted) {
-          setWsConnected(false);
-          reconnectTimer = window.setTimeout(connectWs, 2500);
-        }
-      };
-    };
-
-    connectWs();
-
-    // Fallback state sync poll only when /ws is not actively open (e.g., if a reverse proxy blocks WebSocket)
-    const syncPollTimer = window.setInterval(() => {
-      if (!unmounted && (!ws || ws.readyState !== WebSocket.OPEN)) {
-        fetchMusicState(selectedGuildId).catch(() => {});
-      }
-    }, 3000);
-
-    return () => {
-      unmounted = true;
-      window.clearInterval(syncPollTimer);
-      if (reconnectTimer) window.clearTimeout(reconnectTimer);
-      if (ws) ws.close();
-    };
-  }, [selectedGuildId, fetchMusicState]);
-
-<<<<<<< HEAD
-=======
-  useEffect(() => {
     audioEngine.setVolume(musicState.volume);
     audioEngine.syncPlayback(
       musicState.is_playing && !musicState.is_paused,
@@ -723,7 +575,6 @@ export default function App() {
     browserAudioMuted,
   ]);
 
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
   const handlePlayOrQueueTrack = useCallback(async (track: TrackItem, playNow: boolean) => {
     const isPlaylist =
       track.source_type === 'spotify_playlist' ||
@@ -732,10 +583,7 @@ export default function App() {
       track.title.startsWith('🎶 [PLAYLIST]');
 
     if (playNow && !isPlaylist) {
-<<<<<<< HEAD
-=======
       audioEngine.forceStop();
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
       setMusicState((prev) => ({
         ...prev,
         current_track: {
@@ -749,19 +597,13 @@ export default function App() {
         is_paused: false,
       }));
     }
-<<<<<<< HEAD
-=======
     const actorRole = activeActor.role || (activeActor.isAdmin ? 'admin' : activeActor.hasDjRole ? 'dj' : 'member');
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     const resp = await fetch(`/api/guilds/${selectedGuildId}/music/play`, {
       method: 'POST',
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-<<<<<<< HEAD
-=======
         'X-Actor-Role': actorRole,
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
         'X-Guild-Id': selectedGuildId,
         ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
       },
@@ -811,13 +653,10 @@ export default function App() {
   }, [activeActor, selectedGuildId, sessionToken, fetchMusicState, showNotice]);
 
   const handlePlayerControl = useCallback(async (action: string, value?: unknown, itemId?: string) => {
-<<<<<<< HEAD
-=======
     // Immediate optimistic update (0ms UI latency) + immediate browser audio cut on stop/skip/pause
     if (action === 'stop' || action === 'skip' || action === 'pause') {
       audioEngine.forceStop();
     }
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
     setMusicState((prev) => {
       switch (action) {
         case 'pause':
@@ -1093,25 +932,6 @@ export default function App() {
             </span>
           </div>
 
-<<<<<<< HEAD
-          {/* Mobile Account & Highest Role Badge (shown on right of top row on < md) */}
-          <div className="flex md:hidden items-center gap-1.5 pl-1.5 pr-1.5 py-1 rounded-full bg-[#1F1F1F] border border-white/10 shrink-0">
-            <span className="bg-[#282828] text-[#DC95FF] font-bold text-[10px] rounded-full px-2 py-0.5 border border-[#DC95FF]/30">
-              {activeActor.roleLabel}
-            </span>
-            <span className="text-[11px] font-bold text-white truncate max-w-[78px]">
-              {activeActor.name}
-            </span>
-            <button
-              type="button"
-              aria-label="Logout dari Discord"
-              onClick={handleDiscordLogout}
-              className="p-1 rounded-full hover:bg-white/10 text-[#B3B3B3] hover:text-rose-400"
-              title="Keluar (Logout Discord)"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-            </button>
-=======
           {/* Mobile Account & Role Pill (shown on right of top row on < md) */}
           <div className="flex md:hidden items-center gap-1.5 pl-1.5 pr-1.5 py-1 rounded-full bg-[#1F1F1F] border border-white/10 shrink-0">
             <select
@@ -1127,7 +947,6 @@ export default function App() {
             <span className="text-[11px] font-bold text-white truncate max-w-[68px]">
               {activeActor.name}
             </span>
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
           </div>
         </div>
 
@@ -1153,42 +972,6 @@ export default function App() {
           />
         </div>
 
-<<<<<<< HEAD
-        {/* Right Zone (Desktop 4 cols): Authenticated Discord Profile & Highest Role Badge */}
-        <div className="hidden md:flex md:col-span-4 items-center justify-end gap-2 min-w-0">
-          <div className="flex items-center gap-2 pl-2 pr-2.5 py-1 rounded-full bg-[#1F1F1F] border border-white/10 min-w-0">
-            {activeActor.avatarUrl ? (
-              <img
-                src={activeActor.avatarUrl}
-                alt={activeActor.name}
-                className="w-7 h-7 rounded-full object-cover shrink-0 border border-[#DC95FF]/40"
-              />
-            ) : (
-              <div className="w-7 h-7 rounded-full bg-[#5865F2] text-white font-bold text-xs flex items-center justify-center shrink-0">
-                {activeActor.name.slice(0, 1).toUpperCase()}
-              </div>
-            )}
-            <div className="min-w-0 px-0.5">
-              <div className="text-xs font-bold text-white truncate max-w-[125px] leading-tight">
-                {activeActor.name}
-              </div>
-              <div className="text-[10px] text-[#B3B3B3] font-mono truncate max-w-[125px] leading-tight">
-                {activeActor.discordTag || `@${activeActor.name.toLowerCase().replace(/\s+/g, '')}`}
-              </div>
-            </div>
-            <span
-              className="bg-[#282828] text-[#DC95FF] font-bold text-[10px] rounded-full px-2.5 py-1 border border-[#DC95FF]/35 shrink-0"
-              title="Peran tertinggi otomatis di server Discord ini"
-            >
-              {activeActor.roleLabel}
-            </span>
-            <button
-              type="button"
-              aria-label="Keluar dari sesi Discord"
-              onClick={handleDiscordLogout}
-              className="p-1.5 rounded-full hover:bg-rose-500/15 text-[#B3B3B3] hover:text-rose-300 transition-colors shrink-0"
-              title="Logout & Ganti Akun Discord"
-=======
         {/* Right Zone (Desktop 4 cols): Per-Server Role Switcher & Discord Account Pill */}
         <div className="hidden md:flex md:col-span-4 items-center justify-end gap-2 min-w-0">
           {/* Per-Server Role Switcher + Discord Account Pill */}
@@ -1218,7 +1001,6 @@ export default function App() {
               onClick={handleDiscordLogout}
               className="p-1.5 rounded-full hover:bg-white/10 text-[#B3B3B3] hover:text-white transition-colors shrink-0"
               title="Otorisasi Akun Discord / Ganti Peran"
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
             >
               <LogOut className="w-3.5 h-3.5" />
             </button>
@@ -1393,30 +1175,9 @@ export default function App() {
 
           {/* Compact Discord User Card at bottom of Left Island */}
           <div className="p-3 border-t border-white/5 bg-[#181818]/60 flex items-center justify-between gap-2">
-<<<<<<< HEAD
-            <div className="flex items-center gap-2 min-w-0">
-              {activeActor.avatarUrl ? (
-                <img
-                  src={activeActor.avatarUrl}
-                  alt={activeActor.name}
-                  className="w-7 h-7 rounded-full object-cover shrink-0 border border-white/15"
-                />
-              ) : (
-                <div className="w-7 h-7 rounded-full bg-[#5865F2] text-white font-bold text-xs flex items-center justify-center shrink-0">
-                  {activeActor.name.slice(0, 1).toUpperCase()}
-                </div>
-              )}
-              <div className="min-w-0">
-                <div className="text-xs font-semibold text-white truncate">{activeActor.name}</div>
-                <div className="text-[11px] text-[#B3B3B3] truncate">
-                  {activeActor.discordTag || `@${activeActor.name.toLowerCase()}`} · {activeActor.roleLabel}
-                </div>
-              </div>
-=======
             <div className="min-w-0">
               <div className="text-xs font-semibold text-white truncate">{activeActor.name}</div>
               <div className="text-[11px] text-[#B3B3B3] truncate">{activeActor.roleLabel}</div>
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
             </div>
             <span className="w-2 h-2 rounded-full bg-[#DC95FF] shrink-0" />
           </div>
@@ -1863,11 +1624,8 @@ export default function App() {
               <AcademyAndModulesView
                 subTab={activeTab}
                 guildId={selectedGuildId}
-<<<<<<< HEAD
                 sessionToken={sessionToken}
                 isAdmin={isServerAdmin}
-=======
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
                 tasks={tasks}
                 attachments={attachments}
                 reminders={reminders}
@@ -2059,21 +1817,6 @@ export default function App() {
         </aside>
       </div>
 
-<<<<<<< HEAD
-      {/* Persistent Spotify Bottom Player Dock (Strictly Remote Control for Discord Bot Voice) */}
-      <SpotifyBottomPlayer
-        musicState={musicState}
-        onControl={handlePlayerControl}
-      />
-
-      {/* Mandatory Discord OAuth2 Authentication Gate when Logged Out */}
-      {(!isAuthenticated || showLoginModal) && !authChecking && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Autentikasi Wajib Discord OAuth2 Athenaa"
-          className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-4"
-=======
       {/* Persistent Spotify Bottom Player Dock */}
       <SpotifyBottomPlayer
         musicState={musicState}
@@ -2100,7 +1843,6 @@ export default function App() {
           aria-modal="true"
           aria-label="Otorisasi Akun Discord & Pilih Peran Server"
           className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
         >
           <div className="w-full max-w-md bg-[#181818] border border-white/10 rounded-2xl p-6 shadow-2xl space-y-5">
             <div className="flex items-center justify-between gap-3">
@@ -2108,47 +1850,6 @@ export default function App() {
                 <img
                   src="/logo.png"
                   alt="Athenaa Logo"
-<<<<<<< HEAD
-                  className="w-12 h-12 rounded-full object-cover shrink-0 shadow border border-white/15"
-                />
-                <div>
-                  <h2 className="text-lg font-bold text-white tracking-tight">
-                    Login ke Athenaa Web Control
-                  </h2>
-                  <p className="text-xs text-[#B3B3B3]">
-                    Autentikasi wajib via akun Discord untuk sinkronisasi Voice Channel & Peran Server.
-                  </p>
-                </div>
-              </div>
-              {isAuthenticated && (
-                <button
-                  type="button"
-                  aria-label="Tutup dialog login"
-                  onClick={() => setShowLoginModal(false)}
-                  className="p-1.5 rounded-full bg-[#282828] hover:bg-[#333333] text-[#B3B3B3] hover:text-white"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-[#232323] border border-white/10 space-y-2">
-              <div className="flex items-center gap-2 text-xs font-bold text-[#DC95FF]">
-                <Lock className="w-3.5 h-3.5 shrink-0" />
-                Proteksi Keamanan Zero-Token & Voice Channel Lock
-              </div>
-              <ul className="text-xs text-[#B3B3B3] space-y-1 leading-relaxed list-disc pl-4">
-                <li>
-                  <strong className="text-white">Read-Only OAuth2 (`identify guilds`):</strong> Bot tidak pernah meminta izin kirim pesan dari akun Anda dan langsung mencabut token Discord setelah verifikasi profil.
-                </li>
-                <li>
-                  <strong className="text-white">Prioritas Role Otomatis:</strong> Sistem mendeteksi otomatis peran tertinggi Anda di tiap server (<span className="text-[#DC95FF]">Admin Server</span>, <span className="text-[#DC95FF]">Role DJ</span>, atau <span className="text-[#DC95FF]">Member</span>).
-                </li>
-                <li>
-                  <strong className="text-white">Strict Voice Following:</strong> Pemutaran musik dari web hanya masuk ke Voice Channel Discord tempat akun Anda sedang bergabung.
-                </li>
-              </ul>
-=======
                   className="w-11 h-11 rounded-full object-cover shrink-0 shadow border border-white/15"
                 />
                 <div>
@@ -2220,40 +1921,25 @@ export default function App() {
               <p className="text-xs text-[#B3B3B3] leading-relaxed">
                 Otorisasi akun Discord Anda untuk sinkronisasi otomatis hak akses Admin Server, Role DJ, atau Member pada server Discord terpilih.
               </p>
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
             </div>
 
             <div className="space-y-2.5">
               <button
                 type="button"
                 onClick={() => handleDiscordOAuthAuthorize(false)}
-<<<<<<< HEAD
-                className="w-full py-3 px-4 rounded-full bg-[#5865F2] hover:bg-[#4752C4] text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg cursor-pointer"
-              >
-                <LogIn className="w-4 h-4" />
-                Login dengan Discord (OAuth2 Resmi)
-=======
                 className="w-full py-3 px-4 rounded-full bg-[#5865F2] hover:bg-[#4752C4] text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg"
               >
                 <LogIn className="w-4 h-4" />
                 Login dengan Discord
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
               </button>
 
               <button
                 type="button"
                 onClick={() => handleDiscordOAuthAuthorize(true)}
-<<<<<<< HEAD
-                className="w-full py-2.5 px-4 rounded-full bg-[#282828] hover:bg-[#333333] border border-white/10 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
-              >
-                <ShieldCheck className="w-4 h-4 text-[#DC95FF]" />
-                Login Discord via Jendela Popup
-=======
                 className="w-full py-2.5 px-4 rounded-full bg-[#282828] hover:bg-[#333333] border border-white/10 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors"
               >
                 <ShieldCheck className="w-4 h-4 text-[#DC95FF]" />
                 Buka di Jendela Popup
->>>>>>> 2439a1311dd6e8ff3e51349083f726bff9305006
               </button>
             </div>
           </div>
