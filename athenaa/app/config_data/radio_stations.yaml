@@ -1,0 +1,40 @@
+# Radio Stations Configuration
+# Edit this file to add/remove/modify radio stations without code changes
+# Changes take effect on next bot restart (or SIGHUP for hot reload)
+
+stations:
+  - id: "prambors"
+    name: "Prambors FM 102.2 Jakarta"
+    artist: "Live Radio Stream · Top 40 Indonesia"
+    genre: "Top 40 / Pop Indonesia & Internasional"
+    stream_url: "https://s7.alhastream.com/radio/8030/radio"
+    enabled: true
+
+  - id: "hardrockfm"
+    name: "Hard Rock FM 87.6 Jakarta"
+    artist: "Live Radio Stream · Pop & Rock"
+    genre: "Lifestyle / Rock / Pop Hits"
+    stream_url: "https://n09.radiojar.com/7csmg90fuqruv"
+    enabled: true
+
+  - id: "genfm"
+    name: "Gen FM 98.7 Jakarta"
+    artist: "Live Radio Stream · Musik Hits Indonesia"
+    genre: "Musik Hits Terbaik Indonesia"
+    stream_url: "https://n07.radiojar.com/4ywdgup3bnzuv"
+    enabled: true
+
+  - id: "lofigirl"
+    name: "Lofi Hip Hop Beats 24/7 Stream"
+    artist: "StreamAfrica · Chill & Focus"
+    genre: "Chill / Study Beats"
+    stream_url: "https://play.streamafrica.net/lofiradio"
+    enabled: true
+
+# To add a new station:
+# - id: "new_station_id"          # Unique identifier (lowercase, no spaces)
+#   name: "Display Name"           # Shown in UI
+#   artist: "Artist/Description"   # Shown as artist in player
+#   genre: "Genre Category"        # For filtering/display
+#   stream_url: "https://..."      # Direct audio stream URL
+#   enabled: true                  # Set false to disable without deleting

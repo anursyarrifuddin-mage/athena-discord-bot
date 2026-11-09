@@ -1,0 +1,31 @@
+[package]
+name = "athenaa-shared"
+version = "0.1.0"
+edition = "2021"
+description = "Shared logic for Athenaa Discord Bot - compiled to WASM for TS and Python bindings"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "athenaa_shared"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+regex = "1.10"
+lazy_static = "1.4"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.8", features = ["serde", "v4"] }
+html-escape = "0.2"
+console_error_panic_hook = "0.1"
+hashbrown = "0.14"
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+
+[workspace]
+members = ["shared-logic"]

@@ -1,0 +1,169 @@
+# ============================================================================
+# ATHENAA DISCORD BOT — DEPLOYMENT .gitignore
+# Files/folders that should NOT be committed to git or deployed to production
+# ============================================================================
+
+# -----------------------------------------------------------------------------
+# DEPENDENCY DIRECTORIES (heavy, regenerated on install)
+# -----------------------------------------------------------------------------
+node_modules/
+athenaa/venv/
+athenaa/__pycache__/
+athenaa/app/__pycache__/
+athenaa/app/models/__pycache__/
+athenaa/app/security/__pycache__/
+athenaa/app/services/__pycache__/
+athenaa/app/bot/__pycache__/
+athenaa/app/web/routes/__pycache__/
+athenaa/tests/__pycache__/
+.pytest_cache/
+.venv/
+venv/
+*.py[cod]
+*$py.class
+.local/
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+.env
+# -----------------------------------------------------------------------------
+# BUILD ARTIFACTS (keep athenaa/app/web/static/ tracked so Pterodactyl works out-of-the-box)
+# -----------------------------------------------------------------------------
+dist/
+build/
+!athenaa/app/web/static/
+!athenaa/app/web/static/**
+
+# -----------------------------------------------------------------------------
+# ENVIRONMENT & SECRETS (NEVER COMMIT REAL CREDENTIALS)
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env.production
+.env.*.local
+athenaa/.env
+
+# -----------------------------------------------------------------------------
+# DATABASE & RUNTIME DATA (persistent, unique per deployment)
+# -----------------------------------------------------------------------------
+athenaa/data/
+athenaa/data/athenaa.db
+athenaa/data/athenaa.db-wal
+athenaa/data/athenaa.db-shm
+athenaa/data/athenaa.db-journal
+athenaa/data/*.db
+athenaa/data/*.db-journal
+athenaa/data/*.db-wal
+athenaa/data/*.bak
+athenaa/data/*.gz
+athenaa/data/*.enc
+athenaa/data/backups/
+athenaa/data/backups/*.enc
+athenaa/data/backups/*.gz
+athenaa/data/backups/*.sqlite
+
+# -----------------------------------------------------------------------------
+# UPLOADED MODULES / USER FILES (unique per deployment)
+# -----------------------------------------------------------------------------
+athenaa/modules/
+athenaa/modules/*.pdf
+athenaa/modules/*.doc
+athenaa/modules/*.docx
+
+# -----------------------------------------------------------------------------
+# LOGS (runtime output)
+# -----------------------------------------------------------------------------
+logs/
+*.log
+athenaa/logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# -----------------------------------------------------------------------------
+# IDE / EDITOR / OS METADATA
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# -----------------------------------------------------------------------------
+# TEST COVERAGE & REPORTS
+# -----------------------------------------------------------------------------
+coverage/
+.nyc_output/
+htmlcov/
+.coverage
+.coverage.*
+pytest-html.html
+
+# -----------------------------------------------------------------------------
+# PYTHON PACKAGE / DISTRIBUTION
+# -----------------------------------------------------------------------------
+*.egg-info/
+dist/
+build/
+*.whl
+*.egg
+.pypirc
+
+# -----------------------------------------------------------------------------
+# CACHE DIRECTORIES
+# -----------------------------------------------------------------------------
+.cache/
+.parcel-cache/
+.esbuild/
+.turbo/
+.wrangler/
+
+# -----------------------------------------------------------------------------
+# PLAYWRIGHT / E2E TEST ARTIFACTS
+# -----------------------------------------------------------------------------
+.playwright-cli/
+test-results/
+playwright-report/
+
+# -----------------------------------------------------------------------------
+# MISC TEMP FILES
+# -----------------------------------------------------------------------------
+*.tmp
+*.temp
+tmp/
+temp/
+*.orig
+*.rej
+
+# -----------------------------------------------------------------------------
+# KEEP THESE (do NOT ignore - required for deployment)
+# -----------------------------------------------------------------------------
+# !athenaa/modules/.gitkeep
+# !athenaa/data/.gitkeep
+# !athenaa/logs/.gitkeep
+# !athenaa/requirements.txt
+# !athenaa/start.sh
+# !athenaa/README.md
+# !package.json
+# !package-lock.json / bun.lock
+# !tsconfig.json
+# !vite.config.ts
+# !server.ts
+# !.env.example
+# !.gitignore
+# !README.md
+# !src/
+# !athenaa/app/
+# !public/
+# !index.html
+*.zip

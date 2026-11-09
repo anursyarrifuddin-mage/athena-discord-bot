@@ -1,0 +1,135 @@
+# Application Constants Configuration
+# All magic numbers and tunable parameters centralized here
+# Changes take effect on next bot restart
+
+# Music System Constants
+music:
+  # Duration limits for single tracks (prevents full albums/compilations)
+  min_single_duration_sec: 35      # Minimum track duration (filters TikTok shorts, etc.)
+  max_single_duration_sec: 540     # Maximum track duration (9 minutes - filters full albums)
+  
+  # View count thresholds
+  min_viral_views_threshold: 25000  # Minimum views for "viral" classification
+  
+  # Autoplay settings
+  autoplay_limit: 5                 # Number of autoplay recommendations per batch
+  autoplay_candidate_pool: 18       # Top candidates to consider for weighted random pick
+  
+  # Search limits
+  search_result_limit: 25           # Max results per search query
+  search_cache_ttl_sec: 900         # Search cache TTL (15 minutes)
+  search_cache_max_size: 500        # Max cached search results
+  
+  # YouTube parsing
+  yt_search_timeout_sec: 5.5        # HTTP timeout for YouTube HTML scraping
+  yt_mix_timeout_sec: 5.5           # HTTP timeout for Radio Mix (RD) parsing
+  
+  # yt-dlp streaming
+  ytdlp_timeout_sec: 14             # Subprocess timeout for stream extraction
+  ytdlp_format: "bestaudio[protocol^=m3u8]/best[protocol^=m3u8]/bestaudio[acodec=opus][abr<=160]/bestaudio[ext=webm][abr<=160]/bestaudio[ext=m4a][abr<=160]/bestaudio/best"
+  stream_cache_ttl_sec: 1800        # Stream URL cache TTL (30 minutes)
+  stream_cache_max_size: 300        # Max cached stream URLs
+
+# Discord Bot Constants
+discord:
+  # EXP System
+  exp_per_message: 15               # Base EXP per chat message
+  exp_cooldown_sec: 60              # Cooldown between EXP gains (chat)
+  voice_exp_cooldown_sec: 45        # Cooldown for voice activities
+  exp_gains:
+    voice_join: 20
+    voice_speak: 15
+    voice_listen: 10
+    voice_stream: 25
+    minigame: 20
+    pomodoro: 30
+  
+  # Level formula: max_exp = base + (level * increment)
+  exp_formula_base: 100
+  exp_formula_increment: 25
+  
+  # Leaderboard
+  leaderboard_limit: 15             # Top N users shown
+  
+  # Session management
+  max_sessions_per_user: 5          # Max concurrent Discord OAuth sessions
+  
+  # Host Lock
+  host_lock_cooldown_sec: 60        # Not used currently, reserved
+
+# Academic / Moodle Constants
+academic:
+  # Reminder stages (hours before deadline)
+  reminder_stages:
+    - name: "H-3d"
+      hours_before: 72
+    - name: "H-6h"
+      hours_before: 6
+    - name: "H-1h"
+      hours_before: 1
+  
+  # Default reminder days before (configurable per guild)
+  default_reminder_days: 3
+  
+  # File attachment limits
+  max_attachment_mb: 15
+  allowed_extensions: [".pdf", ".doc", ".docx"]
+  
+  # Sync settings
+  auto_sync_interval_sec: 3600      # 1 hour
+  purge_expired_interval_sec: 300   # 5 minutes (cooldown per guild)
+  ics_request_timeout_sec: 12       # HTTP timeout for .ics fetch
+  moodle_ws_timeout_sec: 12         # HTTP timeout for Moodle WebService
+
+# Backup Constants
+backup:
+  # Encryption
+  encryption_algorithm: "fernet"     # AES-128-GCM via cryptography.Fernet
+  pbkdf2_iterations: 100000         # Key derivation iterations
+  
+  # Compression
+  gzip_compress_level: 6            # 1-9 (6 = good balance)
+  
+  # Retention
+  max_local_backups: 50             # Max backup files to keep locally
+  discord_dm_size_limit_mb: 8       # Discord DM attachment limit
+
+# Database Constants
+database:
+  # SQLite settings
+  journal_mode: "WAL"               # Write-Ahead Logging
+  foreign_keys: true
+  busy_timeout_ms: 15000            # 15 seconds
+  pool_size: 5
+  max_overflow: 10
+
+# Queue Service Constants
+queue:
+  # Cleanup
+  cleanup_interval_sec: 3600        # Check inactive guilds every hour
+  inactivity_threshold_sec: 7200    # Remove guild state after 2 hours inactive
+  
+  # History tracking
+  max_history_keys: 2000            # LRU cache size for track history
+  history_ttl_sec: 3600             # Track history TTL (1 hour)
+  max_recent_tracks: 30             # In-memory recent tracks per guild
+
+# Rate Limiting
+rate_limits:
+  # Auth endpoints (stricter)
+  auth_requests_per_minute: 10
+  auth_window_sec: 60
+  
+  # General API
+  api_requests_per_minute: 90
+  api_window_sec: 60
+  
+  # Music search (per user)
+  search_requests_per_minute: 30
+  search_window_sec: 60
+
+# Logging
+logging:
+  level: "INFO"                     # DEBUG, INFO, WARNING, ERROR
+  format: "json"                    # json or text
+  include_correlation_id: true

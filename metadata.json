@@ -1,0 +1,6 @@
+{
+  "name": "Athenaa — Discord Music, Academy & RPG Hub",
+  "description": "Aplikasi bot Discord multifungsi (Python discord.py + FastAPI + SQLite) dengan Web Dashboard real-time bergaya Spotify, pencarian lagu instan dengan daftar penyanyi, lirik otomatis LRCLIB, pengingat tugas akademik Moodle/Classroom, sistem leveling RPG, dan panel Super-Admin.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
