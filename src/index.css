@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Outfit', system-ui, -apple-system, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --studio-bg: #0A0D12;
+    --studio-panel: #11161F;
+    --studio-elevated: #171E2B;
+    --studio-border: #1E2634;
+    --studio-ink: #F3F6FA;
+    --studio-muted: #94A3B8;
+    --studio-accent: #10B981;
+  }
+
+  html, body {
+    font-family: var(--font-sans);
+    background-color: var(--studio-bg);
+    color: var(--studio-ink);
+    letter-spacing: 0.01em;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.015em;
+  }
+
+  .font-mono, .tabular-nums {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  button, a, select, input, [role="button"] {
+    cursor: pointer;
+  }
+
+  button:disabled, input:disabled, select:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--studio-accent);
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0A0D12;
+}
+::-webkit-scrollbar-thumb {
+  background: #263042;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3B4963;
+}
