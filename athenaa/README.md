@@ -1,140 +1,203 @@
-# Athenaa — Multi-Function Discord Bot & Real-Time Web Dashboard
+# Athenaa — Discord Music, Academic Reminder, AI Assistant & Web Dashboard Bot
 
-**Athenaa** adalah aplikasi bot Discord multifungsi berbasis **Python (`discord.py`, `FastAPI`, `SQLite`, `yt-dlp`, `FFmpeg`)** yang dilengkapi **Web Dashboard real-time bergaya Spotify**. Aplikasi ini menggabungkan sistem pemutar musik dengan pencarian dropdown lagu beserta penyanyi, lirik otomatis tersinkronisasi (`LRCLIB`), manajemen antrean berizin (**Host Lock System**), pengingat tugas akademik (**Moodle `.ics` & Google Classroom**), sistem **RPG Leveling & AFK**, serta **Super-Admin Hub** yang dirancang hemat resource untuk hosting **Pterodactyl** maupun **VPS**.
+**Athenaa** adalah bot Discord multifungsi yang mengintegrasikan pemutar musik berkualitas tinggi berbasis **YouTube Music**, asisten obrolan cerdas **AI Interaktif (`@Athena`)**, sistem pengingat tugas kuliah otomatis (**Waskita / Moodle**), fitur komunitas & moderasi server (**AutoMod, Leveling EXP, AFK**), serta panel kendali jarak jauh berbasis web ([Athenaa Web Dashboard](https://www.google.com/search?q=https://bot.athenaa.my.id)) yang tersinkronisasi secara *real-time*.
 
----
+Bot ini dirancang dengan optimasi penggunaan memori (*Low-Memory Optimizer*) agar pemutaran audio di Voice Channel tetap jernih, stabil, dan responsif sepanjang waktu tanpa membebani RAM server.
 
-## 1. Gambaran Umum Aplikasi
+## Cara Instalasi & Menjalankan Bot
 
-Athenaa dirancang dengan prinsip tanpa biaya langganan API berbayar:
-- **Pencarian Lagu + Penyanyi Instan:** Saat pengguna mengetik judul atau penyanyi di kotak pencarian Web Dashboard, muncul dropdown interaktif berisi daftar lagu, nama penyanyi (*singer*), album, durasi, dan sampul album dengan tombol **Putar Sekarang**, **Tambah Antrean**, dan **Favorit**.
-- **Sinkronisasi Real-Time WebSocket:** Seluruh perubahan status musik di voice channel Discord maupun di Web Dashboard (judul aktif, posisi detik, pause/playing, volume, loop, autoplay, mode 24/7, dan daftar antrean) disinkronkan secara langsung.
-- **Lirik Otomatis LRCLIB:** Mengambil `syncedLyrics` (lirik ber-timestamp per baris) dan `plainLyrics` dari API publik `https://lrclib.net` tanpa API key.
-- **Akademik & Reminder 3 Tahap:** Mendukung tugas manual, impor/sinkronisasi kalender `.ics` Moodle (dengan deduplikasi `UID` dan konversi zona waktu `Asia/Jakarta`), koneksi OAuth2 Google Classroom, dan pengingat otomatis **H-3 hari, H-6 jam, dan H-1 jam** yang persisten di database.
-- **RPG Leveling & AFK:** Formula progresif `max_exp = 100 + (level * 25)` dengan cooldown anti-spam 60 detik per anggota per server dan Top 15 Leaderboard.
-- **Super-Admin Hub:** Pemantauan RAM/CPU proses kontainer, ukuran SQLite, pembuatan snapshot backup SQLite terkompresi & terenkripsi (`sqlite3.backup()`), serta manajemen worker `yt-dlp`.
+Pastikan perangkat atau server sudah terpasang **Python 3.11+**, **FFmpeg**, dan **Node.js** (opsional jika ingin membangun ulang tampilan web).
 
----
-
-## 2. Arsitektur Sistem
-
-```text
-athenaa/
-├── app/
-│   ├── main.py                  # Entrypoint single-instance (Bot Discord + Uvicorn Web)
-│   ├── config.py                # Konfigurasi environment & pemeriksaan kesiapan fitur
-│   ├── database.py              # Manajer SQLite (WAL mode) & migrasi 15 tabel idempoten
-│   ├── models/
-│   │   └── schema.py            # Dataclass domain untuk musik, sesi, dan tugas akademik
-│   ├── security/
-│   │   └── validators.py        # Host Lock, SSRF blocker, validasi file modul, enkripsi HMAC, rate limit
-│   ├── services/
-│   │   ├── music_service.py     # Pencarian lagu+penyanyi, pencocokan metadata Spotify, radio, yt-dlp
-│   │   ├── queue_service.py     # Queue manager per-server, Host Lock, Loop, Autoplay, Mode 24/7
-│   │   ├── lyrics_service.py    # Integrasi LRCLIB (syncedLyrics & plainLyrics + cache + 429 handler)
-│   │   ├── academy_service.py   # CRUD tugas, parser VEVENT .ics Moodle, reminder H-3d/H-6h/H-1h
-│   │   ├── leveling_service.py  # Kalkulasi EXP RPG, cooldown anti-farming, Top 15, AFK
-│   │   └── backup_service.py    # Online backup SQLite aman (.sqlite.gz.enc) & cek versi yt-dlp
-│   ├── bot/
-│   │   └── client.py            # discord.py Bot, Slash Commands, Voice Host Transfer, EXP event
-│   └── web/
-│       └── routes/
-│           └── api.py           # Endpoint REST API & metrik Super-Admin
-├── tests/
-│   └── test_athenaa.py          # Automated tests (unittest / pytest)
-├── requirements.txt             # Daftar dependensi Python
-└── start.sh                     # Skrip startup untuk VPS & Pterodactyl
-```
-
----
-
-## 3. Fitur yang Sudah Selesai dan Batasannya
-
-### Fitur Selesai
-- Pencarian lagu real-time dengan dropdown daftar musik beserta penyanyi (*singer*), album, durasi, dan pemutaran audio nyata.
-- Queue Manager per-server Discord dengan identitas unik per item (`UUID`), *Play Now*, *Move to Top*, *Shuffle*, *Remove*, *Clear*, *Loop* (`off`/`one`/`queue`), *Volume* (`1–100%`), *Autoplay* anti-duplikat, dan *Mode 24/7*.
-- **Host Lock System** lengkap (Session Host, Role DJ, Admin Server, serta perpindahan otomatis saat host keluar dari voice channel).
-- Integrasi lirik otomatis **LRCLIB** (`syncedLyrics` ber-timestamp dan `plainLyrics`).
-- Radio internet terverifikasi (Prambors FM, Hard Rock FM, Gen FM, Lofi Radio) + dukungan custom stream URL dengan validasi anti-SSRF.
-- Manajemen tugas akademik, parser kalender `.ics` Moodle bebas duplikat, evaluasi reminder 3 tahap (`H-3d`, `H-6h`, `H-1h`), dan validasi lampiran modul (`.pdf`, `.doc`, `.docx`, maks 15 MB, pemeriksaan *magic bytes*).
-- Sistem RPG Leveling (`max_exp = 100 + (level * 25)`), cooldown anti-spam, Leaderboard Top 15, dan sistem AFK persisten.
-- Panel Super-Admin dengan metrik resource nyata, backup SQLite terenkripsi, dan pemeriksaan worker `yt-dlp`.
-
-### Batasan Teknis & Layanan Eksternal
-- **Spotify DRM:** Audio tidak pernah diambil secara ilegal dari stream DRM Spotify. Tautan Spotify diambil metadatanya melalui endpoint publik lalu dicocokkan dengan sumber audio terbuka yang dapat diputar.
-- **Mode 24/7 & Hosting:** Bot mempertahankan koneksi voice channel selama proses berjalan, namun tidak dapat tetap aktif apabila kontainer Pterodactyl dimatikan atau koneksi jaringan host terputus.
-- **Google Classroom:** Memerlukan konfigurasi `GOOGLE_CLIENT_ID` dan `GOOGLE_CLIENT_SECRET` dari Google Cloud Console. Apabila belum diisi, status ditampilkan sebagai **Belum Dikonfigurasi** dan pengguna tetap dapat memakai sinkronisasi `.ics` atau input tugas manual.
-
----
-
-## 4. Daftar Dependensi & Persyaratan Sistem
-
-- **Python:** 3.10, 3.11, atau 3.12
-- **FFmpeg:** Wajib terpasang di sistem (`apt install ffmpeg`) untuk streaming audio ke Discord Voice Channel.
-- **Paket Python (`requirements.txt`):** `discord.py[voice]`, `PyNaCl`, `yt-dlp`, `fastapi`, `uvicorn[standard]`, `sqlalchemy`, `aiosqlite`, `httpx`, `python-dotenv`, `psutil`, `icalendar`, `python-dateutil`, `cryptography`, `pytest`.
-
----
-
-## 5. Cara Membuat Discord Bot & Konfigurasi OAuth2 Dashboard
-
-1. Buka [Discord Developer Portal](https://discord.com/developers/applications) dan klik **New Application**.
-2. Pada menu **Bot**:
-   - Klik **Reset Token** dan salin ke variabel `DISCORD_TOKEN` pada file `.env`.
-   - Aktifkan **Message Content Intent**, **Server Members Intent**, dan **Presence Intent**.
-3. Pada menu **OAuth2**:
-   - Salin **Client ID** ke `DISCORD_CLIENT_ID` dan **Client Secret** ke `DISCORD_CLIENT_SECRET`.
-   - Tambahkan Redirect URI: `https://domain-anda.com/auth/callback` (atau `http://localhost:10031/auth/callback` untuk lokal).
-4. Undang bot ke server Discord menggunakan URL Generator dengan scope `bot` dan `applications.commands` serta izin `Connect`, `Speak`, `Send Messages`, `Embed Links`, dan `Attach Files`.
-
----
-
-## 6. Konfigurasi Google Classroom & Kalender Moodle (.ics)
-
-### Kalender Moodle (`.ics`)
-1. Buka halaman **Calendar** pada Moodle kampus Anda, lalu klik **Export Calendar**.
-2. Pilih **All events** (atau **Events related to courses**) dan rentang waktu **Recent and next 60 days**, lalu klik **GetCalendar URL**.
-3. Tempel URL `.ics` tersebut pada halaman **Pengaturan Server** atau **Akademik & Tugas** di Dashboard Athenaa. URL disimpan secara terenkripsi di database.
-
-### Google Classroom OAuth2
-1. Buka [Google Cloud Console](https://console.cloud.google.com/), buat project baru, dan aktifkan **Google Classroom API**.
-2. Konfigurasikan **OAuth Consent Screen** dengan scope baca-saja:
-   - `https://www.googleapis.com/auth/classroom.courses.readonly`
-   - `https://www.googleapis.com/auth/classroom.coursework.me.readonly`
-3. Buat **OAuth 2.0 Client ID (Web application)**, tambahkan Redirect URI sesuai `GOOGLE_REDIRECT_URI`, lalu masukkan kredensial ke `.env`.
-
----
-
-## 7. Menjalankan Aplikasi Secara Lokal & Pada Pterodactyl
-
-### Menjalankan Secara Lokal
+### 1. Clone Repositori & Masuk ke Folder Proyek
 ```bash
+git clone https://github.com/username/athenaa.git
 cd athenaa
-cp ../.env.example .env
-pip install -r requirements.txt
-chmod +x start.sh
-./start.sh
 ```
 
-### Menjalankan Pada Pterodactyl Hosting
-1. Unggah seluruh isi direktori `athenaa/` (atau unduh bundel `.zip` langsung dari tab **Kode Bot Python** pada dashboard).
-2. Alokasikan port jaringan pada panel Pterodactyl (default konfigurasi menggunakan port **`10031`**, sesuaikan `WEB_PORT` dengan port alokasi kontainer Anda).
-3. Gunakan **Startup Command** berikut pada panel Pterodactyl:
-   ```bash
-   bash start.sh
-   ```
-   atau:
-   ```bash
-   python3 -m app.main
-   ```
-4. Pastikan hanya **1 worker** yang dijalankan agar bot tidak membuka koneksi Gateway Discord ganda.
+### 2. Instal Dependensi Python
+```bash
+pip install -r requirements.txt
+```
 
----
+### 3. Build Tampilan Web Dashboard (Opsional)
+Aset tampilan Web Player sudah tersedia secara bawaan. Namun jika kamu mengubah tampilan frontend, jalankan perintah berikut terlebih dahulu:
+```bash
+npm install
+npm run build
+```
 
-## 8. Backup, Restore, dan Pengujian
+### 4. Konfigurasi File `.env`
+rename file `.env.example` menjadi `.env` lalu isi dengan code yang kamu punya ya. Meow!
+```bash
+ren .env.example .env
+```
 
-- **Backup Database:** Buka menu **Super-Admin Hub** lalu klik **Buat Backup SQLite Sekarang**. Sistem menggunakan API `sqlite3.backup()` untuk menghasilkan snapshot konsisten tanpa mengunci database, mengompresinya dengan `gzip`, dan mengenkripsinya dengan `BACKUP_ENCRYPTION_KEY`.
-- **Menjalankan Automated Tests:**
-  ```bash
-  cd athenaa
-  python3 -m unittest discover -s tests -p "test_*.py" -v
-  ```
+### 5. Jalankan Bot & Web Server
+```bash
+python -m app.main
+```
+Atau jika menggunakan Linux / Panel Hosting, kamu juga bisa langsung menjalankan skrip:
+```bash
+bash start.sh
+```
+
+Setelah berjalan, buka Web Dashboard di browser lokal melalui `http://localhost:8000` (atau `http://localhost:10031` sesuai nilai `WEB_PORT` pada file `.env`). Jika kamu menjalankan mode pengembangan frontend dengan `npm run dev`, tampilan Vite akan berjalan di `http://localhost:3000`.
+
+## Manfaat & Fungsi Utama
+
+1. **Hiburan Musik Tanpa Hambatan di Voice Channel**: Memudahkan anggota komunitas memutar lagu dari YouTube Music, tautan YouTube/Spotify, maupun stasiun radio langsung melalui perintah `/play`, menu pilihan `/search`, perintah obrolan `@Athena`, atau melalui tampilan Web Player.
+
+2. **Asisten AI Tongkrongan yang Luwes & Informatif**: Menjawab pertanyaan umum, merangkum berita terkini dari pencarian internet secara singkat dan jelas, serta mengeksekusi seluruh perintah bot hanya dengan memanggil `@Athena` di chat tanpa harus mengetik *slash command*.
+
+3. **Pengingat Tugas Kuliah Otomatis per Server**: Membantu mahasiswa dan komunitas kelas memantau tenggat waktu pengumpulan tugas dari kalender akademik Waskita/Moodle dengan pengingat otomatis setiap pukul **00:01 WIB** serta peringatan bertahap (H-3, H-1, dan H-0).
+
+4. **Manajemen Multi-Server yang Terisolasi & Aman**: Setiap server Discord memiliki pengaturan independen di Web Dashboard, dan setiap pengguna hanya dapat melihat serta mengendalikan server Discord tempat mereka dan bot sama-sama bergabung.
+
+5. **Moderasi Server Senyap & Gamifikasi Komunitas**: Menjaga kebersihan obrolan dengan penghapusan kata terlarang secara otomatis tanpa *spam* pesan peringatan, sekaligus meramaikan server lewat sistem Leveling EXP, *Leaderboard*, status AFK, dan *mini-games*.
+
+## Fitur Unggulan Athenaa
+
+### 1. Pemutar Musik YouTube Music & Efek Audio Real-Time
+
+* **Pencarian Prioritas Judul Lagu (*Title-First Search*)**: Mengutamakan kecocokan judul lagu terlebih dahulu baru nama penyanyi, sehingga lagu lebih mudah ditemukan meskipun pengguna hanya mengingat judulnya atau terdapat sedikit salah ketik (*typo*).
+
+* **Resolusi Tautan Presisi**: Mendukung pemutaran langsung dari tautan video YouTube maupun lagu Spotify dengan pencocokan audio resmi (*Official Audio / Topic*).
+
+* **Pemberitahuan Lagu Otomatis di Chat**: Memberikan informasi lagu yang sedang diputar dan lagu berikutnya di channel teks setiap kali lagu baru dimulai atau berpindah dari antrean.
+
+* **Pilihan Hasil Pencarian Interaktif (`/search`)**: Menampilkan 10 hasil pencarian lagu lengkap dengan menu pilihan (*dropdown*) di bawah pesan, sehingga pengguna cukup mengklik judul lagu untuk langsung memutar atau memasukkannya ke antrean tanpa perlu mengetik `/play` ulang.
+
+* **8 Preset Filter Audio & 5 Suasana Ambience**: Mengubah karakter suara secara langsung (*Normal, Bassboost, Nightcore, Vaporwave, 8D Audio, Lo-Fi, Karaoke, Treble*) atau memutar suara latar (*Hujan, Kafe, Lo-Fi Study, Night Coding, Piano*) untuk menemani belajar dan bekerja.
+
+* **Lirik Lagu Tersinkronisasi**: Menampilkan lirik lagu yang sedang diputar baik melalui Discord maupun secara berjalan (*live synced lyrics*) di Web Dashboard.
+
+### 2. AI Chatbot Interaktif (`@Athena`) & Perintah Bahasa Alami
+
+* **Aktif Khusus Saat Di-tag (`@Athena`)**: Bot hanya merespons apabila di-mention secara eksplisit oleh pengguna, sehingga tidak mengganggu percakapan biasa di dalam channel.
+
+* **Gaya Bahasa Santai, Luwes, & Hemat Kuota**: Merespons sapaan maupun candaan tongkrongan secara luwes layaknya teman mengobrol, tidak kaku, dan tidak memaksakan tawaran memutar musik saat pengguna sedang bertanya hal umum. Untuk pertanyaan berat atau panjang, bot memberikan jawaban inti yang padat dan informatif dari hasil pencarian terkini.
+
+* **Eksekusi Semua Perintah Lewat Chat Biasa**: Pengguna dapat menyuruh bot memutar lagu, melewati lagu, menghentikan musik, mengatur volume, mengaktifkan *autoplay*, mengecek antrean, hingga melihat daftar tugas hanya dengan kalimat sehari-hari.
+
+* **Otomatis Putar atau Masuk Antrean (*Auto-Queue*)**: Saat diminta memutar lagu lewat tag `@Athena`, bot langsung memutar lagu tersebut setelah jeda singkat jika Voice Channel sedang kosong, atau otomatis menambahkannya ke urutan antrean (*queue*) jika sedang ada lagu yang berputar.
+
+* **Memori Konteks per Channel**: Menyimpan riwayat percakapan singkat dan permintaan lagu terakhir secara terpisah di setiap channel. Jika pengguna mengeluhkan lagu sebelumnya belum terputar, bot langsung mengenali judul lagu terakhir yang diminta di channel tersebut dan memutarnya.
+
+* **AI Smart Trending Autoplay**: Ketika mode Autoplay diaktifkan (secara bawaan nonaktif agar tidak memutar lagu sendiri tanpa izin), AI otomatis memilihkan lagu *trending* yang memiliki nuansa serupa saat antrean habis tanpa mengulang lagu yang baru saja diputar.
+
+### 3. Web Dashboard & Remote Control (`bot.athenaa.my.id`)
+
+* **Sinkronisasi Dua Arah Instan**: Seluruh perubahan status lagu, antrean, volume, mode *loop*, *autoplay*, dan lirik tersinkronisasi seketika antara Voice Channel Discord dan Web Player.
+
+* **Filter Server Bersama (*Mutual Server Filtering*)**: Daftar pemilihan server di Web Dashboard disaring secara ketat per akun Discord yang login—hanya menampilkan server di mana pengguna tersebut dan bot Athenaa sama-sama menjadi anggota.
+
+* **Isolasi Kendali Voice Antar-Server**: Pengguna hanya dapat mengendalikan pemutaran musik pada server tempat mereka sedang bergabung di Voice Channel, mencegah gangguan silang antar-server.
+
+* **Pengaturan Multi-Guild Mandiri**: Setiap server memiliki halaman konfigurasi sendiri di Web Dashboard untuk mengatur ID Channel Musik, ID Channel Pengingat Tugas, Tautan Kalender Waskita (`.ics`), Zona Waktu, Interval Pengingat, Cooldown EXP, pesan *Welcome/Goodbye*, serta daftar kata terlarang tanpa terkunci pada pengaturan bawaan server utama.
+
+### 4. Pengingat Tugas Akademik & Waskita Otomatis
+
+* **Sinkronisasi Kalender Akademik (`.ics`)**: Mengambil jadwal tugas kuliah yang memiliki kewajiban pengumpulan (*submittable assignments*) secara otomatis setiap 1 jam dan menghapus tugas yang sudah melewati tenggat waktu.
+
+* **Notifikasi Harian 00:01 WIB & Pengingat Bertahap**: Mengirimkan ringkasan tugas aktif ke channel pengingat masing-masing server setiap pukul 00:01 WIB serta pengingat khusus pada H-3, H-1, dan hari H tenggat pengumpulan.
+
+* **Penyimpanan Modul & Materi Kuliah**: Mendukung pengunggahan dan pengunduhan dokumen materi kuliah (`.pdf`, `.doc`, `.docx`) yang terhubung dengan daftar tugas per server.
+
+### 5. Moderasi Senyap (AutoMod) & Komunitas
+
+* **Sensor Kata Terlarang & Anti-Spam Senyap**: Menghapus pesan yang memuat kata terlarang atau tautan terlarang secara instan dan senyap tanpa mengirimkan pesan peringatan yang memenuhi layar obrolan.
+
+* **Sistem Leveling EXP & Leaderboard**: Menghitung perolehan EXP anggota dari aktivitas mengobrol di teks maupun bergabung di Voice Channel lengkap dengan pengaturan jeda waktu (*cooldown*) per server.
+
+* **Manajemen Status AFK Otomatis**: Menandai pengguna yang sedang AFK beserta alasannya, memberi tahu anggota lain yang me-mention pengguna tersebut, dan mencabut status AFK secara otomatis ketika pengguna kembali aktif mengirim pesan.
+
+## Contoh Interaksi Chat AI (`@Athena`) Tanpa Slash Command
+
+Selain menggunakan *slash command* (`/`), pengguna dapat memanggil `@Athena` dengan kalimat sehari-hari:
+
+| Contoh Pesan Pengguna di Discord | Aksi yang Dilakukan Bot Athenaa |
+| ----- | ----- |
+| `halo @Athena` | Membalas sapaan dengan gaya bahasa santai dan ramah tanpa memakan kuota AI. |
+| `woi @Athena tolong puterin musik dari Lady Gaga yang judulnya Poker Face` | Mencari lagu *Poker Face — Lady Gaga* dengan prioritas judul, membalas singkat (`"Oke boskyuu, nih ku puterin musik dari Lady Gaga berjudul Poker Face yaa~"`), lalu memutarnya di Voice Channel (atau memasukkannya ke antrean jika sedang ada lagu aktif). |
+| `mana @Athena, kok gak ke play musik nya` | Membaca memori channel untuk mengambil judul lagu terakhir yang diminta sebelumnya, lalu langsung memutarnya tanpa salah membaca kata `"nya"` sebagai judul lagu. |
+| `@Athena skip lagu ini dong` | Melewati lagu yang sedang diputar ke lagu berikutnya di antrean. |
+| `@Athena tolong aktifkan mode autoplay` | Mengaktifkan fitur *AI Smart Trending Autoplay* untuk sesi Voice Channel di server tersebut. |
+| `@Athena buka queue` | Menampilkan daftar antrean lagu server saat ini beserta tombol kontrol interaktif. |
+| `@Athena atur volume 90` | Mengubah volume pemutaran musik di Voice Channel menjadi 90%. |
+| `@Athena filter bassboost` | Menerapkan efek audio *Bassboost* secara langsung pada lagu yang sedang diputar. |
+| `@Athena cek tugas kuliah` | Menampilkan daftar tugas akademik yang masih aktif beserta sisa waktu tenggat pengumpulannya. |
+| `@Athena apakah benar berita X hari ini?` | Mencari informasi terbaru dari berita daring dan memberikan jawaban ringkas, padat, serta informatif. |
+| `@Athena reset memory` | Menghapus riwayat memori obrolan AI khusus pada channel tempat perintah tersebut dikirim. |
+
+## Daftar Lengkap Perintah (*Slash Commands*)
+
+### 1. Perintah Musik, Antrean & Efek Audio
+
+| Perintah | Pilihan / Parameter | Penjelasan Fungsi |
+| ----- | ----- | ----- |
+| `/play` | `query` ( diketik pengguna ) | Memutar lagu dari judul/penyanyi YouTube Music, tautan YouTube/Spotify, atau menambahkannya ke antrean. Kolom pencarian sengaja dikosongkan di awal hingga pengguna mengetikkan judul lagu. |
+| `/search` | `query` ( kata kunci lagu ) | Menampilkan 10 hasil pencarian lagu teratas lengkap dengan menu dropdown interaktif di bawah pesan agar pengguna bisa langsung mengklik lagu yang ingin diputar. |
+| `/pause` | *(Tidak ada)* | Menjeda sementara lagu yang sedang diputar di Voice Channel. |
+| `/resume` | *(Tidak ada)* | Melanjutkan pemutaran lagu yang sedang dijeda. |
+| `/skip` | *(Tidak ada)* | Melewati lagu saat ini dan langsung memutar lagu berikutnya di antrean. |
+| `/stop` | *(Tidak ada)* | Menghentikan pemutaran musik dan mengosongkan antrean aktif di server tersebut. |
+| `/leave` | *(Tidak ada)* | Menghentikan musik dan mengeluarkan bot dari Voice Channel. |
+| `/queue` | *(Tidak ada)* | Menampilkan daftar antrean lagu aktif lengkap dengan tombol kontrol interaktif. |
+| `/nowplaying` | *(Tidak ada)* | Menampilkan detail lagu yang sedang diputar, progres durasi, pengaju lagu, dan tombol kontrol. |
+| `/loop` | Pilihan: `Off`, `Satu Lagu (One)`, `Seluruh Antrean (Queue)` | Mengatur mode pengulangan lagu melalui menu pilihan langsung. |
+| `/autoplay` | Pilihan: `Aktifkan (ON)`, `Matikan (OFF)` | Mengaktifkan atau mematikan fitur *AI Smart Trending Autoplay* saat antrean habis. |
+| `/247` | Pilihan: `Aktifkan (ON)`, `Matikan (OFF)` | Mengatur agar bot tetap berada di Voice Channel selama 24/7 meskipun tidak ada lagu yang diputar. |
+| `/volume` | `level` (`1` – `100`) | Mengatur tingkat keras suara pemutaran musik di Voice Channel dan Web Player. |
+| `/seek` | `detik` ( posisi waktu ) | Melompat ke detik atau menit tertentu pada lagu yang sedang diputar. |
+| `/replay` | *(Tidak ada)* | Memutar ulang lagu yang sedang berjalan kembali dari detik `00:00`. |
+| `/previous` | *(Tidak ada)* | Memutar kembali lagu sebelumnya yang baru saja selesai diputar dari riwayat server. |
+| `/shuffle` | *(Tidak ada)* | Mengacak urutan lagu yang ada di dalam daftar antrean saat ini. |
+| `/clear` | *(Tidak ada)* | Menghapus seluruh lagu di daftar antrean tanpa menghentikan lagu yang sedang diputar. |
+| `/remove` | `posisi` ( nomor urut ) | Menghapus satu lagu tertentu dari daftar antrean berdasarkan nomor urutnya. |
+| `/move` | `dari`, `ke` ( nomor urut ) | Memindahkan posisi urutan lagu di dalam antrean ke nomor urut yang diinginkan. |
+| `/skipto` | `posisi` ( nomor urut ) | Melompat langsung ke lagu pada nomor urut tertentu di antrean dan melewati lagu di antaranya. |
+| `/grab` | *(Tidak ada)* | Mengirimkan detail dan tautan lagu yang sedang diputar langsung ke *Direct Message* (DM) pengguna. |
+| `/history` | *(Tidak ada)* | Menampilkan daftar riwayat lagu yang baru saja diputar di server tersebut. |
+| `/lyrics` | `judul` *(opsional)* | Mencari dan menampilkan lirik lagu yang sedang diputar atau berdasarkan judul lagu yang diketik. |
+| `/filter` | Pilihan: `Normal`, `Bassboost`, `Nightcore`, `Vaporwave`, `8D Audio`, `Lo-Fi`, `Karaoke`, `Treble` | Menerapkan efek pemrosesan sinyal audio (*DSP filter*) secara langsung melalui menu pilihan tanpa perlu mengetik manual. |
+| `/ambience` | Pilihan: `Hujan (Rain)`, `Suasana Kafe`, `Lo-Fi Study Beats`, `Night Coding`, `Piano Tenang` | Memutar audio suasana latar untuk belajar, santai, atau *coding* sesuai tautan yang dapat disesuaikan di konfigurasi server. |
+| `/sleeptimer` | `menit` (`0` untuk batal) | Mengatur penghitung waktu mundur otomatis untuk menghentikan musik dan keluar dari Voice Channel setelah sejumlah menit. |
+| `/radio` | Pilihan stasiun radio | Memutar siaran langsung stasiun radio Indonesia maupun internasional (*Prambors FM, Hard Rock FM, Lo-Fi 24/7, Jazz*). |
+
+### 2. Perintah Akademik & Pengingat Tugas (Waskita / Moodle)
+
+| Perintah | Pilihan / Parameter | Penjelasan Fungsi |
+| ----- | ----- | ----- |
+| `/tugas` | *(Tidak ada)* | Menampilkan daftar tugas kuliah aktif beserta mata kuliah, batas waktu pengumpulan, dan indikator urgensi. |
+| `/tambah_tugas` | `matkul`, `judul`, `deadline` | Menambahkan jadwal tugas akademik baru secara manual ke daftar pengingat server. |
+| `/selesai_tugas` | `task_id` | Menandai tugas akademik tertentu sebagai selesai agar tidak lagi memicu pengingat. |
+| `/sync_waskita` | *(Tidak ada)* | Memicu sinkronisasi kalender akademik Waskita/Moodle (`.ics`) secara langsung dan menyaring tugas yang memerlukan pengumpulan. |
+| `/modul` | *(Tidak ada)* | Menampilkan daftar berkas modul atau materi kuliah yang tersimpan di server beserta tautan unduhannya di Web Dashboard. |
+
+### 3. Perintah Komunitas, Leveling RPG & Hiburan
+
+| Perintah | Pilihan / Parameter | Penjelasan Fungsi |
+| ----- | ----- | ----- |
+| `/level` | `member` *(opsional)* | Menampilkan kartu profil RPG pengguna yang berisi Level saat ini, total EXP, dan progres menuju level berikutnya. |
+| `/leaderboard` | *(Tidak ada)* | Menampilkan papan peringkat 10 anggota teratas dengan Level dan EXP tertinggi di server tersebut. |
+| `/afk` | `alasan` *(opsional)* | Mengaktifkan status AFK sehingga bot otomatis memberi tahu siapa pun yang me-mention pengguna tersebut hingga kembali aktif. |
+| `/poll` | `pertanyaan`, `opsi_1` .. `opsi_5` | Membuat pemungutan suara (*polling*) interaktif lengkap dengan reaksi angka otomatis di channel. |
+| `/remindme` | `menit`, `pesan` | Mengatur pengingat pribadi yang akan dikirimkan kembali oleh bot setelah waktu yang ditentukan berakhir. |
+| `/dadu` | `sisi` *(default: 6)* | Melempar dadu acak dengan jumlah sisi yang dapat ditentukan. |
+| `/8ball` | `pertanyaan` | Menanyakan pertanyaan ke bola ajaib *Magic 8-Ball* untuk mendapatkan jawaban hiburan acak. |
+| `/suit` | Pilihan: `Batu 🪨`, `Gunting ✂️`, `Kertas 📄` | Bermain suit (*Batu-Gunting-Kertas*) melawan bot melalui menu pilihan interaktif. |
+| `/kuis` | *(Tidak ada)* | Memulai kuis pengetahuan umum dan teknologi interaktif dengan tombol pilihan ganda A/B/C/D berhadiah EXP. |
+| `/mathbattle` | *(Tidak ada)* | Memulai tantangan berhitung cepat di channel untuk mengadu kecepatan menjawab antar-anggota server. |
+| `/fakta` | *(Tidak ada)* | Menampilkan fakta unik seputar dunia sains, teknologi, dan musik. |
+| `/motivasi` | *(Tidak ada)* | Menampilkan kutipan motivasi singkat untuk menyemangati aktivitas belajar atau pengerjaan proyek. |
+
+### 4. Perintah Sistem, Memori & Bantuan
+
+| Perintah | Pilihan / Parameter | Penjelasan Fungsi |
+| ----- | ----- | ----- |
+| `/help` | Pilihan Kategori: `Semua`, `Musik & Audio`, `Filter & Efek`, `Akademik & Waskita`, `RPG & Komunitas`, `Mini-Games`, `Sistem & Admin` | Menampilkan pusat bantuan interaktif yang dilengkapi menu dropdown kategori untuk menelusuri seluruh fitur dan perintah bot. |
+| `/stats` | *(Tidak ada)* | Menampilkan statistik performa bot meliputi latensi (*ping*), waktu aktif (*uptime*), jumlah server, serta pemakaian RAM saat ini. |
+| `/ram_clean` | *(Tidak ada)* | Menjalankan pembersihan memori (*Garbage Collection & Heap Trim*) secara langsung agar penggunaan RAM tetap rendah dan suara musik tetap stabil. |
+
+
+Disclaimer saya membuat bot musik ini dikarenakan gabut, dengan Gemin 4 Argon yang saya punyai saya mencoba membuat Discord Bot Musik+Academy & Integrasi Web Player sebagai control Bot melalui UI. meow!
