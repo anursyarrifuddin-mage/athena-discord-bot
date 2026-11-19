@@ -76,9 +76,9 @@ Setelah berjalan, buka Web Dashboard di browser lokal melalui `http://localhost:
 
 * **Lirik Lagu Tersinkronisasi**: Menampilkan lirik lagu yang sedang diputar baik melalui Discord maupun secara berjalan (*live synced lyrics*) di Web Dashboard.
 
-### 2. AI Chatbot Interaktif (`@Athena`) & Perintah Bahasa Alami\
+### 2. AI Chatbot Interaktif (`@Athena`) & Perintah Bahasa Alami
 
-![a](image/aichat1.png)\
+![a](image/aichat1.png)
 
 * **Aktif Khusus Saat Di-tag (`@Athena`)**: Bot hanya merespons apabila di-mention secara eksplisit oleh pengguna, sehingga tidak mengganggu percakapan biasa di dalam channel.
 
