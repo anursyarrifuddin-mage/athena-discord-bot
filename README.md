@@ -6,7 +6,7 @@
 
 
 **Athenaa** adalah bot Discord multifungsi yang mengintegrasikan pemutar musik berkualitas tinggi berbasis **YouTube Music**, asisten obrolan cerdas **AI Interaktif (`@Athena`)**, sistem pengingat tugas kuliah otomatis (**Waskita / Moodle**).
-![a](image/aichat1.png)
+![a](image/aichat1.png)\
 Fitur komunitas & moderasi server (**AutoMod, Leveling EXP, AFK**), serta panel kendali jarak jauh berbasis web ([Athenaa Web Dashboard](https://www.google.com/search?q=https://bot.athenaa.my.id)) yang tersinkronisasi secara *real-time*.
 ![a](image/aichat2.png)
 
