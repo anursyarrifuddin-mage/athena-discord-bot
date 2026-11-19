@@ -1,11 +1,14 @@
 # Athenaa — Discord Music, Academic Reminder, AI Assistant & Web Dashboard Bot
 
 <p align="center">
-  <img src="./athenaa/logo.png" alt="Logo" width="500">
+  <img src="./athenaa/logo.png" alt="Logo" width="350">
 </p>
 
 
-**Athenaa** adalah bot Discord multifungsi yang mengintegrasikan pemutar musik berkualitas tinggi berbasis **YouTube Music**, asisten obrolan cerdas **AI Interaktif (`@Athena`)**, sistem pengingat tugas kuliah otomatis (**Waskita / Moodle**), fitur komunitas & moderasi server (**AutoMod, Leveling EXP, AFK**), serta panel kendali jarak jauh berbasis web ([Athenaa Web Dashboard](https://www.google.com/search?q=https://bot.athenaa.my.id)) yang tersinkronisasi secara *real-time*.
+**Athenaa** adalah bot Discord multifungsi yang mengintegrasikan pemutar musik berkualitas tinggi berbasis **YouTube Music**, asisten obrolan cerdas **AI Interaktif (`@Athena`)**, sistem pengingat tugas kuliah otomatis (**Waskita / Moodle**).
+![a](image/aichat1.png)
+Fitur komunitas & moderasi server (**AutoMod, Leveling EXP, AFK**), serta panel kendali jarak jauh berbasis web ([Athenaa Web Dashboard](https://www.google.com/search?q=https://bot.athenaa.my.id)) yang tersinkronisasi secara *real-time*.
+![a](image/aichat2.png)
 
 Bot ini dirancang dengan optimasi penggunaan memori (*Low-Memory Optimizer*) agar pemutaran audio di Voice Channel tetap jernih, stabil, dan responsif sepanjang waktu tanpa membebani RAM server.
 
