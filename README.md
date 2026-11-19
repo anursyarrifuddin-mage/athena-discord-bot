@@ -5,10 +5,7 @@
 </p>
 
 
-**Athenaa** adalah bot Discord multifungsi yang mengintegrasikan pemutar musik berkualitas tinggi berbasis **YouTube Music**, asisten obrolan cerdas **AI Interaktif (`@Athena`)**, sistem pengingat tugas kuliah otomatis (**Waskita / Moodle**).
-![a](image/aichat1.png)\
-Fitur komunitas & moderasi server (**AutoMod, Leveling EXP, AFK**), serta panel kendali jarak jauh berbasis web ([Athenaa Web Dashboard](https://www.google.com/search?q=https://bot.athenaa.my.id)) yang tersinkronisasi secara *real-time*.
-![a](image/aichat2.png)
+**Athenaa** adalah bot Discord multifungsi yang mengintegrasikan pemutar musik berkualitas tinggi berbasis **YouTube Music**, asisten obrolan cerdas **AI Interaktif (`@Athena`)**, sistem pengingat tugas kuliah otomatis (**Waskita / Moodle**), fitur komunitas & moderasi server (**AutoMod, Leveling EXP, AFK**), serta panel kendali jarak jauh berbasis web ([Athenaa Web Dashboard](https://www.google.com/search?q=https://bot.athenaa.my.id)) yang tersinkronisasi secara *real-time*.
 
 Bot ini dirancang dengan optimasi penggunaan memori (*Low-Memory Optimizer*) agar pemutaran audio di Voice Channel tetap jernih, stabil, dan responsif sepanjang waktu tanpa membebani RAM server.
 
@@ -79,7 +76,9 @@ Setelah berjalan, buka Web Dashboard di browser lokal melalui `http://localhost:
 
 * **Lirik Lagu Tersinkronisasi**: Menampilkan lirik lagu yang sedang diputar baik melalui Discord maupun secara berjalan (*live synced lyrics*) di Web Dashboard.
 
-### 2. AI Chatbot Interaktif (`@Athena`) & Perintah Bahasa Alami
+### 2. AI Chatbot Interaktif (`@Athena`) & Perintah Bahasa Alami\
+
+![a](image/aichat1.png)\
 
 * **Aktif Khusus Saat Di-tag (`@Athena`)**: Bot hanya merespons apabila di-mention secara eksplisit oleh pengguna, sehingga tidak mengganggu percakapan biasa di dalam channel.
 
@@ -94,6 +93,8 @@ Setelah berjalan, buka Web Dashboard di browser lokal melalui `http://localhost:
 * **AI Smart Trending Autoplay**: Ketika mode Autoplay diaktifkan (secara bawaan nonaktif agar tidak memutar lagu sendiri tanpa izin), AI otomatis memilihkan lagu *trending* yang memiliki nuansa serupa saat antrean habis tanpa mengulang lagu yang baru saja diputar.
 
 ### 3. Web Dashboard & Remote Control (`bot.athenaa.my.id`)
+
+![a](image/aichat2.png)
 
 * **Sinkronisasi Dua Arah Instan**: Seluruh perubahan status lagu, antrean, volume, mode *loop*, *autoplay*, dan lirik tersinkronisasi seketika antara Voice Channel Discord dan Web Player.
 
